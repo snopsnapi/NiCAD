@@ -3889,7 +3889,11 @@ void Application::renderViewport() {
                 // Touch has no hover and the one finger is the only pointer, so the
                 // tool always owns the drag. Two-finger still pans/zooms; Move (nav
                 // lock) forces orbit.
-                if (toolWantsDrag && !m_moveModeToggle) suppressCamDrag = true;
+                // Fork: handle-aware outside sketch mode, like the desktop branch
+                // below - a drag that misses the op's arrow/handle orbits. Ops
+                // that claim every press (Push/Pull, Extrude) still lock it.
+                if (toolWantsDrag && !m_moveModeToggle)
+                    suppressCamDrag = m_inSketchMode ? true : gizmoOwnsDrag;
                 if (m_moveModeToggle) suppressCamDrag = gizmoOwnsDrag;
             } else {
                 // Desktop: the op reads a LEFT-button drag. Only steal the camera
