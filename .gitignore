@@ -53,3 +53,7 @@ android/keystore.properties
 dist-apk-*
 /dist/
 .worktrees/
+
+# Fork: curator/executor workflow
+logs/
+.claude/settings.local.json
