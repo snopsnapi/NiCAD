@@ -535,6 +535,7 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
             m_startPinchDist = dist;
             m_lastPinchAngle = ang; m_startPinchAngle = ang;
             m_twoFingerMode = 0;          // undecided until one gesture dominates
+            m_twistEngaged = false;
         } else {
             const float dCx = cx - m_lastCentroidX;
             const float dCy = cy - m_lastCentroidY;
@@ -578,19 +579,29 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
                 const float zoomFloor = 20.0f; // net spacing px before zoom is even considered
                 const float zoomDead  =  6.0f; // discount incidental spacing drift
                 const float twistLock = 8.0f * 3.14159265f / 180.0f; // 8 deg before twist is considered
-                // Twist first: an unmistakable rotation of the pair should not
-                // be eaten by the pan bias just because the centroid also
-                // drifted a little.
-                if (twistNet > twistLock && twistArc > panNet * 1.2f && twistArc > zoomNet * 1.2f)
-                    m_twoFingerMode = 3; // twist
-                else if (panNet > panLock && panNet > zoomNet * 1.2f)
+                (void)twistLock; (void)twistArc;
+                if (panNet > panLock && panNet > zoomNet * 1.2f)
                     m_twoFingerMode = 1; // pan
                 else if (zoomNet > zoomFloor && (zoomNet - zoomDead) > panNet * 2.0f)
                     m_twoFingerMode = 2; // zoom
             }
             if (m_twoFingerMode == 1) { m_panAccX += dCx; m_panAccY += dCy; }
             else if (m_twoFingerMode == 2) { m_zoomAcc += dZ; }
-            else if (m_twoFingerMode == 3) { m_twistAcc += dAng; }
+            // Twist is NOT one of the exclusive modes (fork): a real two-finger
+            // rotation always drifts the centroid past the 10 px pan lock long
+            // before the pair has turned a few degrees, so as a mode it never
+            // won. Like a map app, it runs alongside pan/zoom once the pair has
+            // turned past kTwistEngage since the gesture began.
+            {
+                const float kTwistEngage = 15.0f * 3.14159265f / 180.0f;
+                float net = ang - m_startPinchAngle;
+                if (net > 3.14159265f) net -= 6.2831853f;
+                else if (net <= -3.14159265f) net += 6.2831853f;
+                if (!m_twistEngaged && std::fabs(net) > kTwistEngage)
+                    m_twistEngaged = true;      // start from here: no jump
+                else if (m_twistEngaged)
+                    m_twistAcc += dAng;
+            }
             m_lastCentroidX = cx; m_lastCentroidY = cy;
             m_lastPinchDist = dist;
             m_lastPinchAngle = ang;

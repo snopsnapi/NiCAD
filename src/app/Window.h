@@ -179,6 +179,7 @@ private:
     // pan/zoom intent is judged from NET change vs these (not summed per-frame
     // deltas), so a slow pan's finger wobble can't accumulate into a false zoom.
     float m_startCentroidX = 0.0f, m_startCentroidY = 0.0f, m_startPinchDist = 0.0f;
+    bool  m_twistEngaged = false;       // twist runs alongside pan/zoom once the pair turned enough
     float m_startPinchAngle = 0.0f;     // pair angle at gesture start (twist net ref)
 
     // Multi-finger tap gestures (two-finger tap = undo, three-finger = redo).
