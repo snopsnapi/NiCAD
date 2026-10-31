@@ -52,6 +52,7 @@
 #include "io/Settings.h" // for AppSettings::RecentProject (m_recentProjects)
 #include "io/SketchExportOptions.h"
 #include <cstddef>   // size_t
+#include <cstdint>   // uint64_t
 
 // Global (non-namespaced) op, forward-declared for configureFaceOp's signature.
 class MoveFaceOp;
@@ -1334,6 +1335,17 @@ private:
     bool  m_showInferenceToolbarToggle = true;
     // Select tool: overlay lengths / radii / arc info on selected sketch geometry.
     bool  m_showSelectionMeasurements = false;
+    // Light fill of every closed sketch profile (Fusion-style).
+    bool  m_shadeProfiles = true;
+    // Per-sketch memo of the shaded face set: drawnRegions() rebuilds OCCT
+    // wires every call (PointsToBSpline for splines), far too heavy for a
+    // per-frame pass over every visible sketch. Keyed by the region key XOR
+    // the Fill-tool list, so any geometry or fill edit recomputes once.
+    struct ProfileShadeCache {
+        uint64_t key = 0;
+        std::vector<TopoDS_Face> faces;
+    };
+    std::unordered_map<const Sketch*, ProfileShadeCache> m_profileShadeCache;
     // Sketch snap grid follows the zoom (GridScale.h). Off: always the base step.
     bool  m_zoomScaledGrid = true;
     // Android: hide the status bar as well as the navigation bar.
