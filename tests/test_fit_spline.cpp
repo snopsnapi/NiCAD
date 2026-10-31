@@ -145,7 +145,7 @@ TEST(FitSpline, ClosedInterpolatesPeriodically) {
         ASSERT_TRUE(ext.IsDone());
         double dmin = 1e300;
         for (int i = 1; i <= ext.NbExt(); ++i)
-            dmin = std::min(dmin, ext.Value(i).Point().Distance(q));
+            dmin = std::min(dmin, std::sqrt(ext.SquareDistance(i)));
         EXPECT_LT(dmin, 1e-7);
     }
 }

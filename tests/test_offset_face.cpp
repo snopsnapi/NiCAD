@@ -99,7 +99,7 @@ std::vector<TopoDS_Edge> edgesAtZ(const TopoDS_Shape& body, double zPlane) {
 TopoDS_Shape chamferedBox() {
     TopoDS_Shape box = BRepPrimAPI_MakeBox(20.0, 20.0, 20.0).Shape();
     BRepFilletAPI_MakeChamfer ch(box);
-    for (const TopoDS_Edge& e : edgesAtZ(box, 20.0)) ch.Add(2.0, 2.0, e);
+    for (const TopoDS_Edge& e : edgesAtZ(box, 20.0)) ch.Add(2.0, e);
     ch.Build();
     EXPECT_TRUE(ch.IsDone());
     return ch.Shape();
