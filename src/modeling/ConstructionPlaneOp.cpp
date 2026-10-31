@@ -13,6 +13,7 @@
 #include "../i18n.h"
 #include "../i18n.h"
 #include "../i18n.h"
+#include "../ui/UiTheme.h"
 
 ConstructionPlaneOp::ConstructionPlaneOp() = default;
 
@@ -252,12 +253,12 @@ void ConstructionPlaneOp::renderProperties() {
         case PlaneCreationType::XY:
         case PlaneCreationType::XZ:
         case PlaneCreationType::YZ:
-            ImGui::TextWrapped("%s", materializr::tr("Standard reference plane through the origin."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Standard reference plane through the origin."));
             break;
 
         case PlaneCreationType::OffsetFromPlane:
             materializr::lengthField(materializr::tr("Offset Distance"), &m_offset);
-            ImGui::TextWrapped("%s", materializr::tr("Creates a plane parallel to the base plane, offset along its normal."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Creates a plane parallel to the base plane, offset along its normal."));
             break;
 
         case PlaneCreationType::ThroughThreePoints: {
@@ -286,7 +287,7 @@ void ConstructionPlaneOp::renderProperties() {
               if (ImGui::InputScalarN("Through Point", ImGuiDataType_Double, disp, 3, nullptr, nullptr, materializr::lengthFormat())) {
                 m_p1.SetCoord(materializr::toMm(disp[0]), materializr::toMm(disp[1]), materializr::toMm(disp[2]));
               } }
-            ImGui::TextWrapped("%s", materializr::tr("Creates a plane parallel to the selected face, passing through the specified point."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Creates a plane parallel to the selected face, passing through the specified point."));
             break;
         }
     }

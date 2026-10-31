@@ -75,4 +75,7 @@ inline void viewportBanner(const ImVec4& col, const char* fmt, ...) {
     ImGui::PopTextWrapPos();
 }
 
+// Fork: descriptive help paragraphs in op panels/dialogs are hidden.
+inline bool showPanelHints() { return false; }
+
 } // namespace materializr

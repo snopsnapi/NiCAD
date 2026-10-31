@@ -195,16 +195,16 @@ void MeasureTool::renderPanel() {
     // Prompt + results per mode.
     switch (m_mode) {
         case MeasureMode::PickMode:
-            ImGui::TextWrapped("%s", materializr::tr("Pick a measurement mode above."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Pick a measurement mode above."));
             break;
         case MeasureMode::Object:
-            ImGui::TextWrapped("%s", materializr::tr("Click a body in the viewport - clicking a face counts. Ctrl+click to add more bodies, or use box-select."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Click a body in the viewport - clicking a face counts. Ctrl+click to add more bodies, or use box-select."));
             ImGui::Spacing();
             ImGui::TextColored(materializr::accentText(),
                                materializr::tr("Selected: %d %s"), bodyIds, bodyIds == 1 ? "body" : "bodies");
             break;
         case MeasureMode::Edge:
-            ImGui::TextWrapped("%s", materializr::tr("Click within ~8 px of an edge to pick it. Ctrl+click to add more edges to the sum."));
+            if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Click within ~8 px of an edge to pick it. Ctrl+click to add more edges to the sum."));
             ImGui::Spacing();
             ImGui::TextColored(materializr::accentText(),
                                materializr::tr("Selected: %d %s"), edges, edges == 1 ? "edge" : "edges");

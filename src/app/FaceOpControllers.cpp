@@ -122,7 +122,8 @@ std::unique_ptr<Operation> ShellController::buildOp(const IopContext&) {
 }
 
 void ShellController::panelBody(const IopContext& ctx, bool& changed) {
-    ImGui::TextDisabled("%s", materializr::tr("Hollows the body, opening a face."));
+    if (materializr::showPanelHints())
+        ImGui::TextDisabled("%s", materializr::tr("Hollows the body, opening a face."));
 
     if (ctx.cornerCommitUi) {
         // im-touch: number-pad amount field - no InputText, no native
@@ -315,10 +316,12 @@ std::unique_ptr<Operation> TaperController::buildOp(const IopContext& ctx) {
 void TaperController::panelBody(const IopContext& ctx, bool& changed) {
     ImGui::TextDisabled(materializr::tr("%zu face(s) tilt about the body's base."),
                         m_faces.size());
+    if (materializr::showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Tip: pick SIDE walls - a cylinder wall becomes a cone, box sides become a pyramid."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
+    }
 
     if (previewOk()) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
@@ -327,11 +330,13 @@ void TaperController::panelBody(const IopContext& ctx, bool& changed) {
         // buildOp() short-circuits at ~0° so no preview is computed -
         // but the face is fine. Don't flash the "can't taper" warning
         // when the user is just sitting on the slider's zero stop.
-        ImGui::TextDisabled("%s", materializr::tr("Move the angle slider to preview."));
+        if (materializr::showPanelHints())
+            ImGui::TextDisabled("%s", materializr::tr("Move the angle slider to preview."));
     } else {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", materializr::tr("No preview: this face can't draft along the current Pull axis. Try another axis, Flip base, or pick a side face."));
-        ImGui::TextDisabled("%s", materializr::tr("Note: only flat / cylindrical / conical walls can be drafted (a kernel limit) - for freeform shapes like wing skins, use Scale Face on the END face instead."));
+        if (materializr::showPanelHints())
+            ImGui::TextDisabled("%s", materializr::tr("Note: only flat / cylindrical / conical walls can be drafted (a kernel limit) - for freeform shapes like wing skins, use Scale Face on the END face instead."));
         ImGui::PopTextWrapPos();
     }
 
@@ -387,10 +392,12 @@ std::unique_ptr<Operation> DefeatureController::buildOp(const IopContext&) {
 }
 
 void DefeatureController::panelBody(const IopContext&, bool&) {
+    if (materializr::showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Removes the selected face(s) and heals the surrounding faces back together - e.g. take a baked fillet back to a sharp edge so you can re-fillet it."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
+    }
     ImGui::Text(materializr::tr("%zu face(s) selected"), m_faces.size());
 
     if (previewOk()) {
@@ -596,10 +603,12 @@ void OffsetFaceController::drawOverlay(const IopOverlay& ov) const {
 }
 
 void OffsetFaceController::panelBody(const IopContext& ctx, bool& changed) {
+    if (materializr::showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Moves the selected face(s) in or out along their normal. Drag the arrow on the face, or type a distance - negative pulls the face in."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
+    }
 
     if (ctx.cornerCommitUi) {
         // im-touch: number-pad amount field - no InputText, no native
@@ -739,8 +748,10 @@ std::unique_ptr<Operation> ProjectSketchController::buildOp(
 
 void ProjectSketchController::panelBody(const IopContext& ctx,
                                         bool& changed) {
+    if (materializr::showPanelHints()) {
     ImGui::TextDisabled("%s", materializr::tr("Projects the sketch onto this face along the\nsketch's normal, then cuts in or raises out."));
     ImGui::TextWrapped("%s", materializr::tr("Click the sketch elements you want projected - click each to add or remove. Use Select all / Clear below."));
+    }
 
     // Live region scoping: clicking sketch regions in the viewport while this
     // panel is open narrows the projection to just those (each click toggles -
@@ -1097,10 +1108,12 @@ void ScaleFaceController::drawOverlay(const IopOverlay& ov) const {
 }
 
 void ScaleFaceController::panelBody(const IopContext& ctx, bool& changed) {
+    if (materializr::showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Scale this face; the side walls re-slope to follow. Under 100%% shrinks it, over 100%% grows it. Full length = walls follow from the base; shorter = blend only near the face."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
+    }
 
     if (previewOk()) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "%s", materializr::trFormat("Previewing %.0f%% x %.0f%% over %s", m_pctU, m_pctV, materializr::fmtLength(m_len)).c_str());
@@ -1156,7 +1169,8 @@ void ScaleFaceController::panelBody(const IopContext& ctx, bool& changed) {
                                  /*allowSign=*/false, 5.0f, maxPct()))
             changed = true;
     }
-    ImGui::TextDisabled("%s", materializr::tr("Or drag the two arrows on the face."));
+    if (materializr::showPanelHints())
+        ImGui::TextDisabled("%s", materializr::tr("Or drag the two arrows on the face."));
     ImGui::TextDisabled("%s", materializr::trFormat("Length: %s", materializr::fmtLength(m_len)).c_str());
     if (materializr::lengthStepperRow("lenStep", &m_len,
                                 /*allowNegative=*/false, 0.5f,
@@ -2562,11 +2576,13 @@ void MoveFaceController::renderMoveFacePanel(const IopContext& ctx,
             m_st.moveFaceIsTwist = true; // editing twist switches the gesture to twist
             updateMoveFace(ctx);
         }
+        if (materializr::showPanelHints()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.80f, 0.35f, 1.0f));
         ImGui::PushTextWrapPos(230.0f);
         ImGui::TextWrapped("%s", materializr::tr("Tilt and Twist are separate ops - one gesture does either a tilt OR a twist, not both. For a tapered-and-twisted face, commit one then the other."));
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
+        }
 
         // The two readings of a tilt, offered as a choice rather than one being
         // silently right. Off: the body shears, so every feature inside it leans
@@ -2674,7 +2690,8 @@ void MoveFaceController::renderMoveFacePanel(const IopContext& ctx,
         int nstatic = static_cast<int>(m_st.moveFaceHoleVertical.size()) - nvert - nslant;
         ImGui::TextWrapped(materializr::tr("Holes: %d stay, %d slant, %d vertical."),
                            nstatic, nslant, nvert);
-        ImGui::TextDisabled("%s", materializr::tr("Pick a hole's top edge to slant it, its wall to keep it a vertical tube."));
+        if (materializr::showPanelHints())
+            ImGui::TextDisabled("%s", materializr::tr("Pick a hole's top edge to slant it, its wall to keep it a vertical tube."));
     }
 
     if (!ctx.cornerCommitUi) {   // im-touch: corner ✓/✗ FABs instead

@@ -1,4 +1,5 @@
 #include "BoundaryFillOp.h"
+#include "../ui/UiTheme.h"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -176,7 +177,7 @@ std::string BoundaryFillOp::description() const {
 
 void BoundaryFillOp::renderProperties() {
     ImGui::Text(materializr::tr("Silhouettes: %d"), static_cast<int>(m_outers.size()));
-    ImGui::TextWrapped("%s", materializr::tr("Each profile is extruded through the others and the prisms are intersected (visual hull)."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Each profile is extruded through the others and the prisms are intersected (visual hull)."));
 }
 
 std::string BoundaryFillOp::serializeParams() const {

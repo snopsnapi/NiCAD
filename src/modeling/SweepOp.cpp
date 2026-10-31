@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include "../i18n.h"
 #include "../i18n.h"
+#include "../ui/UiTheme.h"
 #include "ParamParse.h"
 
 SweepOp::SweepOp() = default;
@@ -82,7 +83,7 @@ void SweepOp::renderProperties() {
     }
 
     ImGui::Separator();
-    ImGui::TextWrapped("%s", materializr::tr("Select a profile (face or wire) and a path (wire) to sweep along."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Select a profile (face or wire) and a path (wire) to sweep along."));
 }
 
 OperationDiff SweepOp::captureDiff() const {

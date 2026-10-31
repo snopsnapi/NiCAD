@@ -497,7 +497,7 @@ void PropertiesPanel::renderContent() {
             }
             if (haveExtents) {
                 ImGui::TextUnformatted(materializr::trFormat("Size: %s x %s x %s", materializr::fmtLength(extents[0]), materializr::fmtLength(extents[1]), materializr::fmtLength(extents[2])).c_str());
-                ImGui::TextDisabled("%s", materializr::tr("Edit dimensions via the Scale gizmo (R)."));
+                if (materializr::showPanelHints()) ImGui::TextDisabled("%s", materializr::tr("Edit dimensions via the Scale gizmo (R)."));
             } else {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", materializr::tr("Empty shape"));
             }
@@ -915,7 +915,7 @@ void PropertiesPanel::renderSketchConstraintsPanel(int sketchId) {
     auto& cs = sk->getMutableConstraints();
     if (cs.empty()) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", materializr::tr("No constraints on this sketch."));
-        ImGui::TextWrapped("%s", materializr::tr("Add one by right-clicking a sketch element in sketch-edit mode and picking \"Add Constraint\"."));
+        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Add one by right-clicking a sketch element in sketch-edit mode and picking \"Add Constraint\"."));
         return;
     }
 
@@ -1065,7 +1065,7 @@ void PropertiesPanel::renderSketchConstraintsPanel(int sketchId) {
 
     if (!anyDim) {
         ImGui::Spacing();
-        ImGui::TextWrapped("%s", materializr::tr("This sketch has no dimensional constraints - only Horizontal / Parallel / etc., which have nothing to tune."));
+        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("This sketch has no dimensional constraints - only Horizontal / Parallel / etc., which have nothing to tune."));
     } else {
         ImGui::Spacing();
         ImGui::TextDisabled("%s", materializr::tr("Press Enter or click elsewhere to commit a value."));
