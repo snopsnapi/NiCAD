@@ -39,6 +39,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/BatchTransformOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/PushPullOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/Sketch.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/FitSpline.cpp
     ${CMAKE_SOURCE_DIR}/src/i18n.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/AirfoilImport.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchTool.cpp
@@ -742,11 +743,22 @@ add_executable(test_chamfer_at_limit test_chamfer_at_limit.cpp)
 target_link_libraries(test_chamfer_at_limit PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_chamfer_at_limit COMMAND test_chamfer_at_limit)
 
+<<<<<<< HEAD
 # test_offset_face - Offset Face core: face normal offset with neighbour
 # extension, adjacent blend removal on outward moves (Fusion-style)
 add_executable(test_offset_face test_offset_face.cpp)
 target_link_libraries(test_offset_face PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_offset_face COMMAND test_offset_face)
+=======
+# test_fit_spline - the FitSpline port of rt_spline.interpolate(): golden-data
+# match, de Boor evaluation through points/derivatives, OCCT round-trip,
+# periodic closed curve. Data: tests/data/spline_golden.json (regenerate with
+# tools/golden/spline_golden.py).
+add_executable(test_fit_spline test_fit_spline.cpp)
+target_compile_definitions(test_fit_spline PRIVATE MZR_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+target_link_libraries(test_fit_spline PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_fit_spline COMMAND test_fit_spline)
+>>>>>>> task06
 
 # test_cascade_applied_only - the sketch cascade must not replay from a step above the undo tip
 add_executable(test_cascade_applied_only test_cascade_applied_only.cpp)
