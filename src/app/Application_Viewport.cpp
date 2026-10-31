@@ -1113,6 +1113,56 @@ void Application::renderViewport() {
                 if (c->active()) c->drawGizmos3D(g3d);
         }
 
+        // Profile shading (Fusion-style): a faint warm fill on every closed
+        // drawn profile of every visible sketch, so a closed loop reads as
+        // fillable before it is ever picked. Display/export only. Same
+        // cache/worker discipline as the Fill tool block below - never a
+        // main-thread region build. Regions already filled by the Fill tool
+        // are skipped so the two fills never stack. On the active sketch we
+        // additionally pause while a figure is being placed: every point move
+        // would otherwise re-arm the background build.
+        if (m_shadeProfiles) {
+            if (m_profileShadeCache.size() > 64) m_profileShadeCache.clear();
+            const glm::vec3 shadeColor(0.95f, 0.60f, 0.20f); // warm profile
+            auto drawShade = [&](const Sketch& sk) {
+                if (!sk.regionsCached() && !(m_regionWorker && m_regionWorker->ensure(sk)))
+                    return;
+                // Cache key: region geometry XOR the Fill-tool list, so any
+                // edit recomputes exactly once. drawnRegions() itself is NOT
+                // cheap (OCCT wire rebuild per call) - never run it per frame.
+                uint64_t key = sk.regionKey();
+                if (sk.hasFills()) {
+                    for (int idx : sk.filledRegionsCached())
+                        key ^= std::hash<int>{}(idx) + 0x9e3779b97f4a7c15ULL +
+                               (key << 6) + (key >> 2);
+                }
+                auto& entry = m_profileShadeCache[&sk];
+                if (entry.key != key) {
+                    const auto regions = sk.buildRegions();   // cache hit
+                    std::vector<int> filled;
+                    if (sk.hasFills()) filled = sk.filledRegionsCached();
+                    std::vector<TopoDS_Face> faces;
+                    for (int idx : sk.drawnRegions(regions)) {
+                        if (std::find(filled.begin(), filled.end(), idx) != filled.end())
+                            continue;   // already tinted by the Fill tool
+                        faces.push_back(regions[idx].face);
+                    }
+                    entry.key = key;
+                    entry.faces = std::move(faces);
+                }
+                if (entry.faces.empty()) return;
+                m_sketchRenderer->renderFacesFill(entry.faces, shadeColor, 0.12f, view, proj);
+            };
+            for (int sid : m_document->getAllSketchIds()) {
+                if (!m_document->isSketchVisible(sid)) continue;
+                if (m_inSketchMode && sid == m_activeSketchId) continue;
+                if (auto sk = m_document->getSketch(sid)) drawShade(*sk);
+            }
+            if (m_inSketchMode && m_activeSketch &&
+                !(m_sketchTool && m_sketchTool->isPlacing()))
+                drawShade(*m_activeSketch);
+        }
+
         // Cosmetic region fills (Fill tool), under the sketch lines so the
         // outlines stay crisp. Display/export only. Cold regions (just
         // loaded, or mid-edit) build off-thread and the fill appears when
