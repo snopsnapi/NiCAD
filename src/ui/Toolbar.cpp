@@ -1107,7 +1107,7 @@ ToolAction Toolbar::renderSketchSelectedTools() {
 
     ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Sketch"));
     ImGui::Separator();
-    ImGui::TextWrapped("%s", materializr::tr("Tip: hover a sketch region to highlight it, click to select, Ctrl+click to add to selection."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Tip: hover a sketch region to highlight it, click to select, Ctrl+click to add to selection."));
     ImGui::Separator();
 
     if (catalogOffers(ToolAction::EditSketch)) {
@@ -1134,7 +1134,7 @@ ToolAction Toolbar::renderSketchSelectedTools() {
             action = ToolAction::SubtractSketch;
         tip(materializr::tr("Extrude the sketch's regions and cut the result out of the body they\nrun into - the host body when the sketch sits on one, otherwise\nwhichever body the sweep reaches."));
     }
-    ImGui::TextWrapped("%s", materializr::tr("Subtract sweeps the profile like Extrude, then cuts that volume out of the body it reaches."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Subtract sweeps the profile like Extrude, then cuts that volume out of the body it reaches."));
 
     // Move / Rotate gizmo modes - appear here so a selected sketch behaves
     // like a movable construction plane. Bodies have these in renderBodyTools;
@@ -1195,7 +1195,7 @@ ToolAction Toolbar::renderAxisSelectedTools() {
     ToolAction action = ToolAction::None;
     ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Construction Axis"));
     ImGui::Separator();
-    ImGui::TextWrapped("%s", materializr::tr("Axes are 1-D primitives - they'll feed Revolve and future Pattern-Around-Axis ops. For now you can move them; rotate isn't meaningful on a line."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Axes are 1-D primitives - they'll feed Revolve and future Pattern-Around-Axis ops. For now you can move them; rotate isn't meaningful on a line."));
 
     ImGui::Separator();
     ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Transform"));
@@ -1276,7 +1276,7 @@ ToolAction Toolbar::renderSketchRegionTools() {
                                          ToolAction::Revolve});
 
     ImGui::Spacing();
-    ImGui::TextWrapped("%s", materializr::tr("Drag positive distance to extrude, negative to cut into the body the sketch sits on."));
+    if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Drag positive distance to extrude, negative to cut into the body the sketch sits on."));
 
     return action;
 }

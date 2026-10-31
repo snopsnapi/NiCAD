@@ -6,6 +6,7 @@
 #include "../modeling/SplitBodyOp.h"
 #include "../ui/StepperRow.h"
 #include "../ui/TouchWidgets.h"
+#include "../ui/UiTheme.h"
 
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
@@ -138,10 +139,12 @@ std::unique_ptr<Operation> SplitController::buildOp(const IopContext&) {
 }
 
 void SplitController::panelBody(const IopContext& ctx, bool& changed) {
+    if (showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Cut the body in two with a plane. The ghost rectangle in the viewport is where the cut lands."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
+    }
 
     ImGui::TextDisabled("%s", materializr::tr("Axis"));
     for (int a = 0; a < 3; ++a) {

@@ -1,5 +1,6 @@
 #include "ReplayOp.h"
 #include <imgui.h>
+#include "../ui/UiTheme.h"
 #include <map>
 #include <set>
 #include "../i18n.h"
@@ -75,9 +76,9 @@ void ReplayOp::renderProperties() {
     ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_description.c_str());
     if (m_fromReload) {
         ImGui::Spacing();
-        ImGui::TextWrapped("%s", materializr::tr("Loaded from a saved project. Undo/redo work, but the parameters of a reloaded step can't be edited."));
+        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Loaded from a saved project. Undo/redo work, but the parameters of a reloaded step can't be edited."));
     } else {
         ImGui::Spacing();
-        ImGui::TextWrapped("%s", materializr::tr("Batched transform - undo/redo restores the whole set at once."));
+        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Batched transform - undo/redo restores the whole set at once."));
     }
 }

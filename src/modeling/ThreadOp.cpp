@@ -1,5 +1,6 @@
 #include "ui/LengthField.h"
 #include "ThreadOp.h"
+#include "../ui/UiTheme.h"
 #include <Standard_ErrorHandler.hxx>  // OCC_CATCH_SIGNALS (MSVC needs it explicit)
 #include "../core/Verbose.h"
 #include <cstdio>
@@ -2124,11 +2125,13 @@ void ThreadOp::renderProperties() {
     // WRAPPED: this renders inside the history panel's inline editor, the
     // narrowest column in the app - unwrapped it ran off the panel edge.
     // (TextDisabled has no wrapping variant, hence the explicit colour push.)
+    if (materializr::showPanelHints()) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     ImGui::TextWrapped("%s", ropeCap
         ? "Depth caps at 0.45 \xC3\x97 pitch (multi-start rounded)."
         : "Depth caps at 0.65 \xC3\x97 pitch (ISO is 0.61).");
     ImGui::PopStyleColor();
+    }
     // Cross-section profile. Standard is the fast, shipped V-thread; the rest
     // are the maker/printing set (clean but slower - a boolean cut per turn).
     const char* kProfiles[] = {materializr::tr("Standard (V)"), materializr::tr("Trapezoidal (ACME)"),
@@ -2148,7 +2151,7 @@ void ThreadOp::renderProperties() {
         materializr::lengthField(materializr::trFormat("Fit clearance (%s)", materializr::unitSuffix()).c_str(), &m_clearance);
         if (m_clearance < 0.0) m_clearance = 0.0;
         ImGui::SetItemTooltip("%s", materializr::tr("Radial gap so a PRINTED thread fits its mate (0.2\xE2\x80\x93""0.4mm typical). 0 = geometrically exact."));
-        ImGui::TextDisabled("%s", materializr::tr("Non-Standard profiles cut per-turn - a long thread can take a while."));
+        if (materializr::showPanelHints()) ImGui::TextDisabled("%s", materializr::tr("Non-Standard profiles cut per-turn - a long thread can take a while."));
     }
     bool rh = m_rightHanded;
     if (ImGui::Checkbox(materializr::tr("Right-handed"), &rh)) m_rightHanded = rh;

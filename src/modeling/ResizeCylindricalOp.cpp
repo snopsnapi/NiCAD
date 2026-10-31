@@ -1,6 +1,7 @@
 #include "ui/LengthField.h"
 #include "ResizeCylindricalOp.h"
 #include "../core/Verbose.h"
+#include "../ui/UiTheme.h"
 
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -703,9 +704,11 @@ void ResizeCylindricalOp::renderProperties() {
     }
     ImGui::TextUnformatted(materializr::trFormat("Length: %s", materializr::fmtLength(m_height)).c_str());
     // WRAPPED: inline history-panel editor - see ThreadOp for the same note.
+    if (materializr::showPanelHints()) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     ImGui::TextWrapped("%s", materializr::tr("Clicking the circular edge / face in the viewport also re-edits."));
     ImGui::PopStyleColor();
+    }
 }
 
 std::string ResizeCylindricalOp::description() const {

@@ -8701,7 +8701,7 @@ void Application::run() {
                     bool open = true;
                     if (ImGui::Begin("Pick more sketches", &open, flags)) {
                         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f), "%s", materializr::tr("Loft needs at least two profiles."));
-                        ImGui::TextWrapped("%s", materializr::tr("Ctrl-click the other sketches (or their regions) in loft order - as many as you like - then click Loft again."));
+                        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Ctrl-click the other sketches (or their regions) in loft order - as many as you like - then click Loft again."));
                     }
                     ImGui::End();
                     if (!open) m_loftPickHintVisible = false;

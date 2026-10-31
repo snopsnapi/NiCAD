@@ -1,4 +1,5 @@
 #include "FaceTweakOp.h"
+#include "../ui/UiTheme.h"
 
 #include "core/Units.h"
 
@@ -144,9 +145,10 @@ std::string FaceTweakOp::description() const {
 }
 
 void FaceTweakOp::renderProperties() {
-    ImGui::TextWrapped("%s", materializr::tr(
-        "The face moved and only the faces meeting it were rebuilt - the rest of "
-        "the body is untouched."));
+    if (materializr::showPanelHints())
+        ImGui::TextWrapped("%s", materializr::tr(
+            "The face moved and only the faces meeting it were rebuilt - the rest of "
+            "the body is untouched."));
 }
 
 OperationDiff FaceTweakOp::captureDiff() const {

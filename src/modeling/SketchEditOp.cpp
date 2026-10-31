@@ -3,6 +3,7 @@
 #include "SketchEditOp.h"
 #include "SketchSolver.h"
 #include <imgui.h>
+#include "../ui/UiTheme.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -524,7 +525,7 @@ void SketchEditOp::renderProperties() {
     // directly and is undoable, so that's the single home for resizing.
 
     if (!anyDim) {
-        ImGui::TextWrapped("%s", materializr::tr("Nothing editable in this step. Resize lines, rectangles and arcs from the Properties panel while editing the sketch."));
+        if (materializr::showPanelHints()) ImGui::TextWrapped("%s", materializr::tr("Nothing editable in this step. Resize lines, rectangles and arcs from the Properties panel while editing the sketch."));
     } else {
         ImGui::TextDisabled("%s", materializr::tr("Press Enter to commit a value, then Apply Changes."));
     }
