@@ -144,6 +144,17 @@ void Camera::orbitLevel(float yawDelta, float pitchDelta)
 void Camera::orbit(float deltaX, float deltaY)
 {
     finishAnimation();
+    if (m_hasOrbitPivot) {
+        const glm::vec3 pos0 = m_position, tgt0 = m_target, up0 = m_up;
+        orbitRaw(deltaX, deltaY);
+        applyOrbitPivot(pos0, tgt0, up0);
+        return;
+    }
+    orbitRaw(deltaX, deltaY);
+}
+
+void Camera::orbitRaw(float deltaX, float deltaY)
+{
     const float s = m_orbitSpeed * m_mouseSensitivity;
     if (m_levelOrbit) {
         orbitLevel(deltaX * s, deltaY * s);
@@ -158,6 +169,17 @@ void Camera::orbit(float deltaX, float deltaY)
 void Camera::rotateAroundTarget(float yawRadians, float pitchRadians)
 {
     finishAnimation();
+    if (m_hasOrbitPivot) {
+        const glm::vec3 pos0 = m_position, tgt0 = m_target, up0 = m_up;
+        rotateAroundTargetRaw(yawRadians, pitchRadians);
+        applyOrbitPivot(pos0, tgt0, up0);
+        return;
+    }
+    rotateAroundTargetRaw(yawRadians, pitchRadians);
+}
+
+void Camera::rotateAroundTargetRaw(float yawRadians, float pitchRadians)
+{
     if (m_levelOrbit) {
         orbitLevel(yawRadians, pitchRadians);
     } else {
@@ -165,6 +187,57 @@ void Camera::rotateAroundTarget(float yawRadians, float pitchRadians)
         trackballRotate(m_position, m_target, m_up, -yawRadians, -pitchRadians);
         m_levelAxis = glm::vec3(0.0f, m_up.y < 0.0f ? -1.0f : 1.0f, 0.0f);
     }
+}
+
+void Camera::applyOrbitPivot(const glm::vec3& pos0, const glm::vec3& tgt0,
+                             const glm::vec3& up0)
+{
+    // Rotation R mapping the old camera basis onto the new one. Both raw
+    // rotations are rigid rotations of the rig, so R is proper and takes
+    // (tgt0 - pos0) to the new view direction while carrying up0 to m_up.
+    auto basis = [](const glm::vec3& f, const glm::vec3& u) {
+        glm::vec3 r = glm::cross(f, u);
+        if (glm::length(r) < 1e-6f) r = glm::cross(f, glm::vec3(0, 1, 0));
+        r = glm::normalize(r);
+        // Columns (r, up, f), re-orthogonalized - right-handed, det +1.
+        return glm::mat3(r, glm::normalize(glm::cross(r, f)), f);
+    };
+    const glm::vec3 off0 = tgt0 - pos0;
+    const glm::vec3 off1 = m_target - m_position;
+    if (glm::length(off0) < 1e-6f || glm::length(off1) < 1e-6f) return;
+    const glm::mat3 B0 = basis(glm::normalize(off0), up0);
+    const glm::mat3 B1 = basis(glm::normalize(off1), m_up);
+    const glm::mat3 R = B1 * glm::transpose(B0);
+
+    // Spin the rig about the pivot: the target/position offsets rotate, the
+    // camera->target vector (and so the distance) is preserved, and the pivot
+    // stays on the exact same screen pixel it occupied.
+    const glm::vec3 tgtOld = m_target;   // raw orbit leaves the target put
+    m_target = m_orbitPivot + R * (tgtOld - m_orbitPivot);
+    m_position = m_target + R * (pos0 - tgt0);
+}
+
+void Camera::roll(float radians)
+{
+    finishAnimation();
+    if (m_hasOrbitPivot) {
+        const glm::vec3 pos0 = m_position, tgt0 = m_target, up0 = m_up;
+        rollRaw(radians);
+        applyOrbitPivot(pos0, tgt0, up0);
+        return;
+    }
+    rollRaw(radians);
+}
+
+void Camera::rollRaw(float radians)
+{
+    const glm::vec3 dir = m_target - m_position;
+    if (glm::length(dir) < 1e-6f) return;
+    const glm::mat4 rot = glm::rotate(glm::mat4(1.0f), radians, glm::normalize(dir));
+    m_up = glm::normalize(glm::vec3(rot * glm::vec4(m_up, 0.0f)));
+    // Level orbit rebuilds the up from m_levelAxis each orbit, so the tilt
+    // would be lost on the next orbit unless the axis carries it.
+    m_levelAxis = glm::normalize(glm::vec3(rot * glm::vec4(m_levelAxis, 0.0f)));
 }
 
 void Camera::pan(float deltaX, float deltaY)

@@ -478,6 +478,7 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
             m_sessionMaxFingers = 0;
             m_sessionPanNet = 0.0f;
             m_sessionZoomNet = 0.0f;
+            m_sessionTwistNet = 0.0f;
         }
         if (it == m_fingers.end()) m_fingers.push_back({id, x, y});
         else { it->x = x; it->y = y; }
@@ -497,12 +498,14 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
         const float sx = m_fingers[0].x - m_fingers[1].x;
         const float sy = m_fingers[0].y - m_fingers[1].y;
         const float dist = std::sqrt(sx * sx + sy * sy);
+        const float ang = std::atan2(sy, sx);
         if (m_twoFinger && type == SDL_EVENT_FINGER_UP) {
             // A finger lifted but 2+ remain: the tracked pair changed, so
             // centroid/spacing jumped. Re-anchor instead of accumulating the
             // jump as pan/zoom (which would also veto the multi-finger tap).
             m_lastCentroidX = cx; m_lastCentroidY = cy; m_lastPinchDist = dist;
             m_startCentroidX = cx; m_startCentroidY = cy; m_startPinchDist = dist;
+            m_lastPinchAngle = ang; m_startPinchAngle = ang;
             return;
         }
         if (!m_twoFinger) {
@@ -530,11 +533,18 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
             m_lastPinchDist = dist;
             m_startCentroidX = cx; m_startCentroidY = cy; // net-intent references
             m_startPinchDist = dist;
+            m_lastPinchAngle = ang; m_startPinchAngle = ang;
             m_twoFingerMode = 0;          // undecided until one gesture dominates
         } else {
             const float dCx = cx - m_lastCentroidX;
             const float dCy = cy - m_lastCentroidY;
             const float dZ  = dist - m_lastPinchDist;
+            // Pair-angle delta wrapped to (-pi, pi], so a frame crossing the
+            // +/-pi branch (fingers vertical, tipping past straight) reports a
+            // small step instead of a near-full turn.
+            float dAng = ang - m_lastPinchAngle;
+            if (dAng > 3.14159265f) dAng -= 6.2831853f;
+            else if (dAng <= -3.14159265f) dAng += 6.2831853f;
             if (m_twoFingerMode == 0) {
                 // Decide pan vs zoom from NET change since the gesture began, not
                 // a running sum of per-frame deltas. Summing |Δspacing| each frame
@@ -546,10 +556,20 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
                 const float panNet  = std::sqrt((cx - m_startCentroidX) * (cx - m_startCentroidX) +
                                                 (cy - m_startCentroidY) * (cy - m_startCentroidY));
                 const float zoomNet = std::fabs(dist - m_startPinchDist);
+                // Twist net: absolute pair-angle turn since the gesture began,
+                // scaled by half the finger spacing into an ARC LENGTH in
+                // pixels - comparable to panNet/zoomNet no matter how wide
+                // apart the fingers sit.
+                float twistNet = ang - m_startPinchAngle;
+                if (twistNet > 3.14159265f) twistNet -= 6.2831853f;
+                else if (twistNet <= -3.14159265f) twistNet += 6.2831853f;
+                twistNet = std::fabs(twistNet);
+                const float twistArc = twistNet * dist * 0.5f;
                 // Peak travel while undecided - the multi-finger tap check reads
                 // these at lift-off (fingers are gone by then).
-                if (panNet  > m_sessionPanNet)  m_sessionPanNet  = panNet;
-                if (zoomNet > m_sessionZoomNet) m_sessionZoomNet = zoomNet;
+                if (panNet  > m_sessionPanNet)   m_sessionPanNet   = panNet;
+                if (zoomNet > m_sessionZoomNet)  m_sessionZoomNet  = zoomNet;
+                if (twistNet > m_sessionTwistNet) m_sessionTwistNet = twistNet;
                 // Strong pan bias: pan is the gesture users struggle to land, so
                 // it commits on modest travel and only needs to edge out zoom,
                 // whereas zoom must clearly dominate AND clear a real-pinch floor
@@ -557,15 +577,23 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
                 const float panLock   = 10.0f; // net centroid px to commit to pan
                 const float zoomFloor = 20.0f; // net spacing px before zoom is even considered
                 const float zoomDead  =  6.0f; // discount incidental spacing drift
-                if (panNet > panLock && panNet > zoomNet * 1.2f)
+                const float twistLock = 8.0f * 3.14159265f / 180.0f; // 8 deg before twist is considered
+                // Twist first: an unmistakable rotation of the pair should not
+                // be eaten by the pan bias just because the centroid also
+                // drifted a little.
+                if (twistNet > twistLock && twistArc > panNet * 1.2f && twistArc > zoomNet * 1.2f)
+                    m_twoFingerMode = 3; // twist
+                else if (panNet > panLock && panNet > zoomNet * 1.2f)
                     m_twoFingerMode = 1; // pan
                 else if (zoomNet > zoomFloor && (zoomNet - zoomDead) > panNet * 2.0f)
                     m_twoFingerMode = 2; // zoom
             }
             if (m_twoFingerMode == 1) { m_panAccX += dCx; m_panAccY += dCy; }
             else if (m_twoFingerMode == 2) { m_zoomAcc += dZ; }
+            else if (m_twoFingerMode == 3) { m_twistAcc += dAng; }
             m_lastCentroidX = cx; m_lastCentroidY = cy;
             m_lastPinchDist = dist;
+            m_lastPinchAngle = ang;
             // Report the gesture centroid as the cursor. The viewport applies
             // the pan/zoom deltas inside its hovered gate, which used to
             // survive a pinch only because the cursor froze at the first
@@ -704,7 +732,8 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
         const std::uint32_t nowT = platformTicksMs();
         const bool shortTouch = (nowT - m_sessionStartTicks) < 300u;
         const bool stationary = m_twoFingerMode == 0 &&
-                                m_sessionPanNet < 12.0f && m_sessionZoomNet < 16.0f;
+                                m_sessionPanNet < 12.0f && m_sessionZoomNet < 16.0f &&
+                                m_sessionTwistNet < 8.0f * 3.14159265f / 180.0f;
         if (shortTouch && stationary) {
             if (m_sessionMaxFingers == 2) m_undoTapPending = true;
             else if (m_sessionMaxFingers == 3) m_redoTapPending = true;
@@ -807,6 +836,13 @@ bool Window::consumeTouchZoom(float& dz) {
     if (m_zoomAcc == 0.0f) return false;
     dz = m_zoomAcc;
     m_zoomAcc = 0.0f;
+    return true;
+}
+
+bool Window::consumeTouchTwist(float& dAngle) {
+    if (m_twistAcc == 0.0f) return false;
+    dAngle = m_twistAcc;
+    m_twistAcc = 0.0f;
     return true;
 }
 

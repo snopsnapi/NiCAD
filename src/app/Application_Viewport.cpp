@@ -3952,7 +3952,16 @@ void Application::renderViewport() {
             if (!ImGui::IsMouseDown(m_orbitButton) &&
                 !ImGui::IsMouseDown(m_panButton))
                 m_panAnchorHeld = false;
-            if (!ImGui::IsMouseDown(m_orbitButton)) m_orbitAnchorHeld = false;
+            if (!ImGui::IsMouseDown(m_orbitButton)) {
+                m_orbitAnchorHeld = false;
+                // Drop the touch orbit pivot when the one-finger gesture ends.
+                // During a two-finger gesture the left button is released the
+                // whole time, so this fires every frame then - leave the pivot
+                // alone there; the twist block clears it after the twist idles.
+                const bool twoFinger = materializr::touchMode() && m_window &&
+                                       m_window->twoFingerActive();
+                if (!twoFinger) cam.clearOrbitPivot();
+            }
             auto anchoredPan = [&](float dx, float dy) {
                 if (!m_panAnchorHeld) {
                     m_panAnchorHeld = true;
@@ -3968,15 +3977,17 @@ void Application::renderViewport() {
                 ImVec2 delta = io.MouseDelta;
                 if (io.KeyShift) anchoredPan(delta.x, delta.y);
                 else {
-                    // Re-anchor the orbit pivot onto the geometry near the VIEW
-                    // CENTRE, once per gesture, so the orbit spins around the
-                    // object instead of a point that drifted behind it. Moving
-                    // the target is seamless (a tiny mouse delta preserves the
-                    // camera position; only the pivot relocates). Desktop only;
-                    // a total miss (nothing near centre) leaves the target as-is.
+                    // Re-anchor the orbit pivot onto nearby geometry, once per
+                    // gesture, so the orbit spins around the object instead of
+                    // a point that drifted behind it. Desktop picks around the
+                    // VIEW CENTRE and moves the TARGET (seamless: a tiny mouse
+                    // delta preserves the camera position; only the pivot
+                    // relocates). Touch picks UNDER THE FINGER and sets an
+                    // orbit pivot instead, so the view is not re-centered.
+                    // A total miss leaves the target as-is.
                     if (!m_orbitAnchorHeld) {
                         m_orbitAnchorHeld = true;
-                        if (!materializr::touchMode() && m_picker && m_document) {
+                        if (m_picker && m_document) {
                             auto pk = [&](float sx, float sy, glm::vec3& out) -> bool {
                                 try {
                                     auto r = m_picker->pick(sx, sy, contentSize.x,
@@ -3985,11 +3996,25 @@ void Application::renderViewport() {
                                 } catch (...) {}
                                 return false;
                             };
-                            const float cx = contentSize.x * 0.5f;
-                            const float cy = contentSize.y * 0.5f;
                             glm::vec3 pivot;
-                            bool got = pk(cx, cy, pivot); // dead-centre wins outright
+                            bool got;
+                            if (materializr::touchMode()) {
+                                // Touch: pivot around the model point UNDER THE
+                                // FINGER (Fusion-style) instead of the view
+                                // centre, so the grabbed point stays under the
+                                // finger while orbiting. Finger over empty space
+                                // falls back to the centre rings below.
+                                const ImVec2 mp = ImGui::GetMousePos();
+                                const ImVec2 rm = ImGui::GetItemRectMin();
+                                got = pk(mp.x - rm.x, mp.y - rm.y, pivot);
+                            } else {
+                                const float cx = contentSize.x * 0.5f;
+                                const float cy = contentSize.y * 0.5f;
+                                got = pk(cx, cy, pivot); // dead-centre wins outright
+                            }
                             if (!got) {
+                                const float cx = contentSize.x * 0.5f;
+                                const float cy = contentSize.y * 0.5f;
                                 // Centre is over a gap: sample expanding rings and
                                 // AVERAGE the first ring that hits. One part flanking
                                 // the centre → pivot leans to it (nearest); two parts
@@ -4009,20 +4034,30 @@ void Application::renderViewport() {
                                     if (n > 0) { pivot = sum / float(n); got = true; break; }
                                 }
                             }
-                            if (got && cam.isOrthographic()) {
-                                // Orbiting out of an orthographic view (a sketch):
-                                // take only the pick's DEPTH. A sideways move of the
-                                // target would tilt the picture off its exact
-                                // view direction on the first frame of the drag.
-                                const glm::vec3 d = cam.getTarget() - cam.getPosition();
-                                const float dist = glm::length(d);
-                                if (dist > 1e-4f) {
-                                    const glm::vec3 vd = d / dist;
-                                    const float along = glm::dot(pivot - cam.getTarget(), vd);
-                                    pivot = cam.getTarget() + vd * std::min(along, 0.9f * dist);
-                                } else got = false;
+                            if (materializr::touchMode()) {
+                                // Touch: rotate ABOUT the picked point without
+                                // re-centering. setTarget would re-aim the view
+                                // and the point under the finger would snap to
+                                // screen centre; a pivot keeps it under the
+                                // finger (Fusion-style). No ortho depth
+                                // adjustment - the pivot never moves the view.
+                                if (got) cam.setOrbitPivot(pivot);
+                            } else {
+                                if (got && cam.isOrthographic()) {
+                                    // Orbiting out of an orthographic view (a sketch):
+                                    // take only the pick's DEPTH. A sideways move of the
+                                    // target would tilt the picture off its exact
+                                    // view direction on the first frame of the drag.
+                                    const glm::vec3 d = cam.getTarget() - cam.getPosition();
+                                    const float dist = glm::length(d);
+                                    if (dist > 1e-4f) {
+                                        const glm::vec3 vd = d / dist;
+                                        const float along = glm::dot(pivot - cam.getTarget(), vd);
+                                        pivot = cam.getTarget() + vd * std::min(along, 0.9f * dist);
+                                    } else got = false;
+                                }
+                                if (got) cam.setTarget(pivot);
                             }
-                            if (got) cam.setTarget(pivot);
                         }
                     }
                     // Touch orbit honours the user's sensitivity slider; desktop
@@ -4078,6 +4113,40 @@ void Application::renderViewport() {
                     // need a 2.5x slider is now the 1.0x baseline (raw zoom was
                     // painfully slow). Slider still scales from here.
                     if (std::fabs(tdz) > 1.5f) cam.zoom(tdz * 0.015f * m_touchZoomSens);
+                }
+                // Two-finger twist: roll the view around the sight axis. The
+                // first twist frame of a gesture pivots about the model point
+                // under the finger-pair centroid WITHOUT re-centering (a
+                // setTarget there would snap the point to screen centre).
+                float tdr = 0.0f;
+                const int fc = ImGui::GetFrameCount();
+                if (!gizmoOwnsDrag && m_window->consumeTouchTwist(tdr) &&
+                    std::fabs(tdr) > 1e-4f) {
+                    if (fc - m_lastTouchTwistFrame > 10) {
+                        const ImVec2 mp = ImGui::GetMousePos();
+                        const ImVec2 rm = ImGui::GetItemRectMin();
+                        try {
+                            auto r = m_picker->pick(mp.x - rm.x, mp.y - rm.y,
+                                                    contentSize.x, contentSize.y,
+                                                    cam, *m_document);
+                            if (r.hit) {
+                                cam.setOrbitPivot(r.hitPoint);
+                                m_touchTwistPivot = true;
+                            }
+                        } catch (...) {}
+                    }
+                    m_lastTouchTwistFrame = fc;
+                    // Minus: the screen-space pair angle grows clockwise (y-down),
+                    // while glm::rotate about the sight axis is right-handed - the
+                    // negation makes the model turn with the fingers.
+                    cam.roll(-tdr);
+                } else if (m_touchTwistPivot && fc - m_lastTouchTwistFrame > 10) {
+                    // Twist idle for over 10 frames: its gesture is over. Drop
+                    // the pivot so later orbits rotate about the target again.
+                    // (Guarded by the flag so a live one-finger orbit pivot is
+                    // never wiped mid-gesture.)
+                    m_touchTwistPivot = false;
+                    cam.clearOrbitPivot();
                 }
             }
 

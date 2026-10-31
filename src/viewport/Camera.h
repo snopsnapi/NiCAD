@@ -17,6 +17,12 @@ public:
     /// Used by the ViewCube rotate buttons.
     void rotateAroundTarget(float yawRadians, float pitchRadians);
 
+    /// Roll the view around the view axis (target - position): only the up
+    /// vector turns, position and target stay put. In level-orbit mode the
+    /// turntable axis turns with it, so a rolled view keeps its tilt while
+    /// orbiting (and the horizon stays rolled by the same amount).
+    void roll(float radians);
+
     /// Translate camera and target in screen-aligned plane.
     void pan(float deltaX, float deltaY);
 
@@ -158,6 +164,16 @@ public:
     /// the target distance. Cleared when the pan gesture ends.
     void setPanRefDist(float d) { m_panRefDist = d; }
 
+    /// Set a temporary orbit pivot (touch: the model point under the finger).
+    /// While set, orbit()/rotateAroundTarget()/roll() rotate the WHOLE camera
+    /// rig - position, target and up - about this point, instead of spinning
+    /// around the target and dragging the view with it. The picture only
+    /// rotates; nothing recenters (setTarget would snap the picked point to
+    /// screen centre). The app clears the pivot when the gesture ends.
+    void setOrbitPivot(const glm::vec3& p) { m_orbitPivot = p; m_hasOrbitPivot = true; }
+    void clearOrbitPivot() { m_hasOrbitPivot = false; }
+    bool hasOrbitPivot() const { return m_hasOrbitPivot; }
+
 private:
     struct Animation {
         bool active = false;
@@ -199,6 +215,23 @@ private:
     // Exact-pan support (see setViewHeightPx / setPanRefDist).
     float m_viewHeightPx = 0.0f;
     float m_panRefDist = -1.0f;
+
+    // Temporary orbit pivot (see setOrbitPivot): while set, the orbit/roll
+    // entry points re-seat the rig around this point after their raw rotation.
+    bool m_hasOrbitPivot = false;
+    glm::vec3 m_orbitPivot{0.0f};
+
+    // The pre-pivot bodies of orbit()/rotateAroundTarget()/roll() (no
+    // finishAnimation, no pivot re-seat) - keep the raw math in one place.
+    void orbitRaw(float deltaX, float deltaY);
+    void rotateAroundTargetRaw(float yawRadians, float pitchRadians);
+    void rollRaw(float radians);
+    // After a raw rotation, rotate the target/position offsets from the old
+    // camera pose (pos0/tgt0/up0, captured before) onto the new basis, about
+    // m_orbitPivot. m_up already holds the rotated up; only the rig's
+    // placement changes here.
+    void applyOrbitPivot(const glm::vec3& pos0, const glm::vec3& tgt0,
+                         const glm::vec3& up0);
 };
 
 } // namespace materializr

@@ -94,6 +94,7 @@ public:
     // Returns true and writes the pending delta (then clears it) if any.
     bool consumeTouchPan(float& dx, float& dy);   // centroid movement, pixels
     bool consumeTouchZoom(float& dz);             // pinch delta, wheel-equivalent
+    bool consumeTouchTwist(float& dAngle);        // two-finger twist delta, radians
     bool consumeDoubleTap();                      // true once after two quick taps (touch "double-click")
     // true once (with the tap position) after a GENUINE single tap lifts - not a
     // hold, drag, or 2-finger gesture. Selection commits off THIS instead of the
@@ -167,15 +168,18 @@ private:
     bool  m_twoFinger = false;           // a two-finger gesture is active
     bool  m_suppressLeft = false;        // ignore a leftover finger after 2-finger
     float m_lastPinchDist = 0.0f;
+    float m_lastPinchAngle = 0.0f;      // pair angle atan2(sy, sx), last frame
     float m_lastCentroidX = 0.0f, m_lastCentroidY = 0.0f;
     float m_panAccX = 0.0f, m_panAccY = 0.0f, m_zoomAcc = 0.0f;
-    // Two-finger gesture lock: a gesture commits to EITHER pan OR zoom once one
-    // clearly dominates, so they don't fight mid-gesture (0 undecided/1 pan/2 zoom).
+    float m_twistAcc = 0.0f;            // accumulated twist since last consume
+    // Two-finger gesture lock: a gesture commits to ONE intent once it clearly
+    // dominates, so they don't fight mid-gesture (0 undecided/1 pan/2 zoom/3 twist).
     int   m_twoFingerMode = 0;
     // Reference centroid/spacing captured when the two-finger gesture begins.
     // pan/zoom intent is judged from NET change vs these (not summed per-frame
     // deltas), so a slow pan's finger wobble can't accumulate into a false zoom.
     float m_startCentroidX = 0.0f, m_startCentroidY = 0.0f, m_startPinchDist = 0.0f;
+    float m_startPinchAngle = 0.0f;     // pair angle at gesture start (twist net ref)
 
     // Multi-finger tap gestures (two-finger tap = undo, three-finger = redo).
     // A "touch session" spans first-finger-down to all-fingers-up; the tap
@@ -185,6 +189,7 @@ private:
     int   m_sessionMaxFingers = 0;
     float m_sessionPanNet = 0.0f;   // peak net centroid travel while undecided
     float m_sessionZoomNet = 0.0f;  // peak net spacing change while undecided
+    float m_sessionTwistNet = 0.0f; // peak net pair-angle change while undecided (rad)
     bool  m_undoTapPending = false;
     bool  m_redoTapPending = false;
 

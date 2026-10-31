@@ -1794,6 +1794,8 @@ private:
     // touch gestures for as long as two-finger pan events keep arriving.
     bool m_panAnchorHeld = false;   // desktop: a camera button hold owns the anchor
     int m_lastTouchPanFrame = -1000; // touch: last frame a two-finger pan applied
+    int m_lastTouchTwistFrame = -1000; // touch: last frame a two-finger twist applied
+    bool m_touchTwistPivot = false;    // touch: a twist-set orbit pivot is live (cleared when the twist idles out)
     // Orbit re-anchors its pivot onto the geometry at the VIEW CENTRE at the
     // start of each orbit gesture, so it spins around the object instead of a
     // point that drifted behind it (cursor-zoom leaves the target off the
