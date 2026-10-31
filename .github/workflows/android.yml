@@ -1,0 +1,90 @@
+name: Android Build (nikaishi)
+
+on:
+  push:
+    branches: [nikaishi]
+    paths-ignore: ['**.md', 'tasks/**', 'docs/**']
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      # Step-level env is not visible in that step's own `if:`, so expose a flag job-wide.
+      HAS_DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" \
+              "ndk;26.3.11579264" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Restore OCCT prefix
+        id: occt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/Android/prefix
+            ~/Android/dl
+          key: occt-arm64-${{ hashFiles('android/scripts/setup-deps.sh', 'android/copy-occt-libs.sh') }}
+
+      - name: Native dependencies (SDL3 + OCCT cross-build)
+        run: |
+          export ANDROID_NDK="$ANDROID_HOME/ndk/26.3.11579264"   # OCCT is cross-built with r26, like upstream
+          JOBS=4 bash android/scripts/setup-deps.sh
+
+      # Save right away, so a later Gradle failure does not throw away the ~40 min OCCT build.
+      - name: Save OCCT prefix
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/Android/prefix
+            ~/Android/dl
+          key: occt-arm64-${{ hashFiles('android/scripts/setup-deps.sh', 'android/copy-occt-libs.sh') }}
+
+      - name: Restore stable debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        if: env.HAS_DEBUG_KEYSTORE == 'true'
+        run: |
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          MATERIALIZR_APP_ID=com.nikaishi.materializr MATERIALIZR_APP_LABEL="Materializr N" \
+          MATERIALIZR_OCCT_PREFIX="$HOME/Android/prefix/arm64-v8a" ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: materializr-n-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload debug keystore for curator
+        if: env.HAS_DEBUG_KEYSTORE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-keystore
+          path: ~/.android/debug.keystore
+          retention-days: 3

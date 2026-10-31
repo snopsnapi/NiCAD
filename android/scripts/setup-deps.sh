@@ -74,6 +74,9 @@ fetch "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3
 ln -sfn "$SRC/SDL3-$SDL_VER" "$REPO/android/app/jni/SDL"
 echo "SDL3 linked at android/app/jni/SDL"
 
+if [ -f "$PREFIX/lib/libTKernel.so" ] && [ "${FORCE_NATIVE_REBUILD:-0}" != "1" ]; then
+    echo "OCCT already in $PREFIX - skipping FreeType/OCCT build (FORCE_NATIVE_REBUILD=1 to rebuild)"
+else
 # ── FreeType (static) ────────────────────────────────────────────────────────
 fetch "https://download.savannah.gnu.org/releases/freetype/freetype-$FT_VER.tar.gz" "$DL/freetype.tar.gz" "$FT_SHA256"
 [ -d "$SRC/freetype-$FT_VER" ] || tar -xzf "$DL/freetype.tar.gz" -C "$SRC"
@@ -122,6 +125,7 @@ rm -rf "$BUILD/occt-$ABI"
     -DUSE_TK=OFF -DUSE_TCL=OFF -DUSE_FREEIMAGE=OFF -DUSE_TBB=OFF -DUSE_VTK=OFF \
     -DUSE_RAPIDJSON=OFF -DUSE_OPENVR=OFF -DUSE_DRACO=OFF -DUSE_FFMPEG=OFF
 "$CMAKE_BIN" --build "$BUILD/occt-$ABI" --target install -j"$JOBS"
+fi
 
 # ── Stage OCCT + resources into the app ──────────────────────────────────────
 bash "$REPO/android/copy-occt-libs.sh" "$ABI"

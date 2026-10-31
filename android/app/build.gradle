@@ -55,6 +55,9 @@ android {
         versionCode 52
         def vName = '1.7.5'
         versionName vName
+        // CI side-load build label override (e.g. "Materializr N" alongside the
+        // Play build); without the env var the manifest label is unchanged.
+        manifestPlaceholders = [appLabel: (System.getenv('MATERIALIZR_APP_LABEL') ?: '@string/app_name')]
 
         externalNativeBuild {
             cmake {
