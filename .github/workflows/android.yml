@@ -58,13 +58,19 @@ jobs:
             ~/Android/dl
           key: occt-arm64-${{ hashFiles('android/scripts/setup-deps.sh', 'android/copy-occt-libs.sh') }}
 
-      - name: Restore stable debug keystore
+      # Stable debug key at a known path: restored from the secret, or (first
+      # run, no secret yet) generated here and uploaded for the curator.
+      - name: Debug keystore
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
-        if: env.HAS_DEBUG_KEYSTORE == 'true'
         run: |
-          mkdir -p ~/.android
-          echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          KS="$RUNNER_TEMP/ci-debug.keystore"
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$KS"
+          else
+            keytool -genkeypair -v -keystore "$KS" -storetype PKCS12               -storepass android -keypass android -alias androiddebugkey               -keyalg RSA -keysize 2048 -validity 10000               -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          echo "MATERIALIZR_DEBUG_KEYSTORE=$KS" >> "$GITHUB_ENV"
 
       - name: Build debug APK
         run: |
@@ -86,6 +92,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debug-keystore
-          path: /home/runner/.android/debug.keystore
+          path: ${{ runner.temp }}/ci-debug.keystore
           retention-days: 3
-          include-hidden-files: true   # ~/.android is a hidden dir
