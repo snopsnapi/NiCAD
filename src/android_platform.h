@@ -18,6 +18,10 @@ void androidInitRuntime();
 // frame: the JNI query is throttled and the last value reused.
 int androidTopInsetPx();
 
+// Number of "Back" gestures (right edge / back key) since the last call; each
+// one is an Undo request. Always 0 off Android. Call once per frame.
+int androidPollBackGesture();
+
 // True in the Android build. Lets settings UI for Android-only options be
 // compiled (and type-checked) on every platform instead of hiding behind #ifdef.
 #ifdef __ANDROID__

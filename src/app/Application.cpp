@@ -3138,7 +3138,14 @@ void Application::handleShortcuts() {
     // shortcuts until it resolves: undo/redo/delete would mutate the document - and
     // the worker's target body - out from under the in-flight op, whose result is
     // pushed on the main thread when the future lands.
-    if (m_threadComputing) return;
+    if (m_threadComputing) {
+#if defined(__ANDROID__)
+        // Drop Back gestures made while the op computes: queued, they would
+        // undo that very op the moment it lands.
+        (void)materializr::androidPollBackGesture();
+#endif
+        return;
+    }
 
     // A capture only lives while the list is on screen: switching to another
     // Settings tab or closing the dialog would otherwise leave every shortcut
@@ -3207,6 +3214,21 @@ void Application::handleShortcuts() {
             }
         }
     }
+#if defined(__ANDROID__)
+    // Android "Back" (right-edge swipe / back key) = touch Undo, one step per gesture.
+    for (int n = materializr::androidPollBackGesture(); n > 0; --n) {
+        if (m_edgeCtl.active() || m_extrudeCtl.active() || m_ppCtl.active() ||
+            !m_deferredHeavy.empty())
+            break;   // same guard as Ctrl+Z: never undo under a live/queued operation
+        if (m_inSketchMode && m_sketchTool &&
+            m_sketchTool->getMode() == SketchToolMode::Spline &&
+            !m_sketchTool->splinePointsInProgress().empty()) {
+            recordSketchMutation([&] { m_sketchTool->removeLastSplinePoint(); });
+        } else if (touchCanUndo()) {
+            touchUndo();
+        }
+    }
+#endif
     if (keyPressed(KeyAction::Redo, false)) {
         // Also blocked while a confirmed operation is still QUEUED. A
         // deferred commit runs between frames, and cleanup() has already

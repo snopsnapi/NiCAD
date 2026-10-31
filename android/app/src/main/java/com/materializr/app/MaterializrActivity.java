@@ -13,6 +13,9 @@ import android.provider.OpenableColumns;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
+import android.window.BackEvent;
+import android.window.OnBackAnimationCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -31,6 +34,13 @@ import org.libsdl.app.SDLActivity;
 public class MaterializrActivity extends SDLActivity {
 
     private static MaterializrActivity sInstance;
+
+    // ---- Android "Back" = Undo bridge ----------------------------------------
+    // Back gestures waiting for native (Undo requests). Read+cleared by
+    // pollBackGesture() on the SDL thread once per frame.
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingBack =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private int mBackEdge = -1;   // BackEvent.EDGE_LEFT / EDGE_RIGHT of the current gesture, -1 = unknown
 
     // ---- Storage Access Framework + share bridge -----------------------------
     // The native file layer (FileDialogs.cpp) drives these via JNI and polls
@@ -172,6 +182,10 @@ public class MaterializrActivity extends SDLActivity {
         sResultReady = false;
         return sResultValue;
     }
+
+    // Number of Back gestures since the last call, each one an Undo request.
+    // Native (android_platform.cpp) polls this once per frame.
+    public static int pollBackGesture() { return sPendingBack.getAndSet(0); }
 
     // Raise the soft keyboard directly. SDL_StartTextInput only shows the IME
     // when SDL_GetFocusWindow() is non-null, which it isn't in our immersive
@@ -512,6 +526,48 @@ public class MaterializrActivity extends SDLActivity {
         sInstance = this;
         // No storage-permission prompt: file open/save use the system SAF picker
         // (per-URI access), and export sharing uses the FileProvider.
+
+        // "Back" means Undo here, never "leave the app". The dispatcher path
+        // (API 33+) needs android:enableOnBackInvokedCallback="true" in the
+        // manifest; a left-edge swipe is ignored, everything else (right-edge
+        // swipe, back key, KEYCODE_BACK) counts as one Undo request.
+        if (Build.VERSION.SDK_INT >= 34) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    new OnBackAnimationCallback() {
+                        @Override
+                        public void onBackStarted(BackEvent e) {
+                            mBackEdge = e.getSwipeEdge();
+                        }
+                        @Override
+                        public void onBackProgressed(BackEvent e) {}
+                        @Override
+                        public void onBackCancelled() {
+                            mBackEdge = -1;
+                        }
+                        @Override
+                        public void onBackInvoked() {
+                            if (mBackEdge != BackEvent.EDGE_LEFT)
+                                sPendingBack.incrementAndGet();
+                            mBackEdge = -1;
+                        }
+                    });
+        } else if (Build.VERSION.SDK_INT == 33) {
+            // API 33 has no swipe-edge info - count every back as the right edge.
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    () -> sPendingBack.incrementAndGet());
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Pre-33 there is no OnBackInvokedDispatcher: swallow the back key
+        // (no super - finishing the app is never what Back means in a CAD
+        // session) and count it as an Undo request, like the right-edge
+        // swipe above. Not called on 33+ while a dispatcher callback above
+        // is registered.
+        sPendingBack.incrementAndGet();
     }
 
     @Override
