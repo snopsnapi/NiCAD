@@ -88,3 +88,4 @@ jobs:
           name: debug-keystore
           path: /home/runner/.android/debug.keystore
           retention-days: 3
+          include-hidden-files: true   # ~/.android is a hidden dir
