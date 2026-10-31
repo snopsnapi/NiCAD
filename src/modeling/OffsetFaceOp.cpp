@@ -26,10 +26,10 @@ bool OffsetFaceOp::execute(Document& doc) {
         std::vector<TopoDS_Face> faces;
         for (const TopoDS_Shape& f : m_faces) faces.push_back(TopoDS::Face(f));
 
-        offsetface::Options opt;
+        materializr::offsetface::Options opt;
         opt.removeAdjacentBlends = m_removeBlends;
-        offsetface::Result r;
-        if (!offsetface::offsetFaces(m_previousShape, faces, m_distance, opt, r)) {
+        materializr::offsetface::Result r;
+        if (!materializr::offsetface::offsetFaces(m_previousShape, faces, m_distance, opt, r)) {
             std::fprintf(stderr, "[OffsetFace] %s\n", r.error.c_str());
             return false;
         }

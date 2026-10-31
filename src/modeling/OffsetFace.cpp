@@ -159,7 +159,7 @@ bool toSolid(TopoDS_Shape& res, std::string& error) {
             error = "offset result is not a solid";
             return false;
         }
-        res = mk.Solid();
+        res = mk.Shape();
         return true;
     }
     if (res.ShapeType() == TopAbs_COMPOUND) {
@@ -172,7 +172,7 @@ bool toSolid(TopoDS_Shape& res, std::string& error) {
         if (sx.More()) {
             BRepBuilderAPI_MakeSolid mk(TopoDS::Shell(sx.Current()));
             if (mk.IsDone()) {
-                res = mk.Solid();
+                res = mk.Shape();
                 return true;
             }
         }
