@@ -357,6 +357,11 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
         add(MZ_ICON_REPAIR,   "Remove Feature", ToolAction::RemoveFace, false,
             "Delete the picked face and heal the body over it - takes a baked "
             "fillet or chamfer back to a sharp edge so it can be re-applied.");
+        add(MZ_ICON_PUSHPULL, "Offset Face", ToolAction::OffsetFace, false,
+            "Move the picked face(s) in or out along their normal - drag the "
+            "arrow on the face, or type a distance. Adjacent fillets/chamfers "
+            "come off first when moving out, so the face moves and the round "
+            "comes back sharp.");
         add(MZ_ICON_PROJECT,  "Project", ToolAction::ProjectSketch, false,
             "Project a sketch onto this face along the sketch's normal, then "
             "engrave (cut in) or emboss (raise out) to a depth.");
@@ -1039,7 +1044,8 @@ ToolAction Toolbar::renderFaceTools() {
     // is wrong right again - and mostly wanted on imported parts, so they belong
     // together. Each still appears only when the selection can use it: that gate
     // is catalogOffers(), i.e. the same catalogue the rails read.
-    if (catalogOffers(ToolAction::RemoveFace) || catalogOffers(ToolAction::MergeFaces)) {
+    if (catalogOffers(ToolAction::RemoveFace) || catalogOffers(ToolAction::MergeFaces)
+        || catalogOffers(ToolAction::OffsetFace)) {
         ImGui::Separator();
         ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Repair"));
         ImGui::Separator();
@@ -1047,6 +1053,10 @@ ToolAction Toolbar::renderFaceTools() {
             "Delete the picked face(s) and heal the surrounding faces back "
             "together - take a baked fillet/chamfer back to a sharp edge so "
             "it can be re-applied, or clean a round/hole off an imported part.");
+        btn(ToolAction::OffsetFace, "Offset Face",
+            "Move the picked face(s) in or out along their normal. Adjacent "
+            "fillets/chamfers come off first when moving out, so the face "
+            "moves and the round comes back sharp.");
         btn(ToolAction::MergeFaces, "Merge Faces",
             "Merge faces that are really one surface into one face. Imported "
             "STEP parts arrive with flat surfaces split into pieces - the seam "
@@ -1058,7 +1068,7 @@ ToolAction Toolbar::renderFaceTools() {
         action = renderCatalogRemainder({
             ToolAction::SketchOnFace, ToolAction::PushPull, ToolAction::ExtrudeSketch,
             ToolAction::Shell, ToolAction::ScaleFace, ToolAction::Taper,
-            ToolAction::RemoveFace, ToolAction::MergeFaces,
+            ToolAction::RemoveFace, ToolAction::OffsetFace, ToolAction::MergeFaces,
             ToolAction::ProjectSketch, ToolAction::EditDiameter,
             ToolAction::Thread, ToolAction::Unfold, ToolAction::EditFilletChamfer,
             // Move/Rotate come from the shared Transform row that render()

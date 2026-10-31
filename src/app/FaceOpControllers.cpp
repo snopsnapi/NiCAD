@@ -15,6 +15,8 @@
 #include "../modeling/ScaleFaceOp.h"
 #include "../modeling/ProjectSketchOp.h"
 #include "../modeling/DefeatureOp.h"
+#include "../modeling/OffsetFaceOp.h"
+#include "../ui_scale.h"
 #include "../modeling/ResizeCylindricalOp.h"
 #include "../modeling/FaceTweak.h"
 #include "../modeling/FaceTweakOp.h"
@@ -401,6 +403,268 @@ void DefeatureController::panelBody(const IopContext&, bool&) {
 }
 
 void DefeatureController::onCleanup() { m_faces.clear(); }
+
+// ─── Offset Face ─────────────────────────────────────────────────────────────
+
+// Screen-space arrow for Offset Face: base at the face, tip `distance` along
+// the normal, but never shorter than kMinArrowDp on screen - a 5 mm arrow on a
+// big part is a few pixels, impossible to grab with a finger.
+namespace {
+constexpr float kMinArrowDp = 70.0f;
+template <class ToScreen>
+bool offsetArrowScreen(const ToScreen& toScreen, const glm::vec3& origin,
+                       const glm::vec3& normal, float distance,
+                       glm::vec2& a, glm::vec2& b) {
+    if (!toScreen(origin, a)) return false;
+    glm::vec2 unit;
+    if (!toScreen(origin + normal, unit)) return false;
+    glm::vec2 dir = unit - a;
+    const float dl = glm::length(dir);
+    if (dl < 1e-4f) return false;            // normal points at the camera
+    dir /= dl;
+    float len = dl * std::max(std::abs(distance), 1.0f);
+    len = std::max(len, kMinArrowDp * materializr::uiScale());
+    b = a + dir * len;
+    return true;
+}
+} // namespace
+
+int OffsetFaceController::onBegin(const IopContext& ctx) {
+    // Gather every selected face on ONE body - multi-select a few faces to
+    // offset them together (same rule as Defeature).
+    m_faces.clear();
+    int body = -1;
+    for (const auto& e : ctx.selection.getSelection()) {
+        if (e.type != SelectionType::Face || e.bodyId < 0 || e.shape.IsNull())
+            continue;
+        if (body < 0) body = e.bodyId;
+        if (e.bodyId != body) continue; // one body per op
+        m_faces.push_back(TopoDS::Face(e.shape));
+    }
+    if (m_faces.empty()) return -1;
+
+    m_distance = 5.0f;
+    materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+    m_inputFocus = true;
+    m_removeBlends = true;
+    m_dragging = false;
+
+    // Arrow frame: start at the first face's centre of mass, point along its
+    // outward normal. BRepGProp_Face::Normal accounts for the face's
+    // orientation, so a reversed face still points out of the body.
+    m_hasHandle = false;
+    try {
+        const TopoDS_Face& f = m_faces.front();
+        GProp_GProps props;
+        BRepGProp::SurfaceProperties(f, props);
+        const gp_Pnt c = props.CentreOfMass();
+        m_origin = glm::vec3(static_cast<float>(c.X()),
+                             static_cast<float>(c.Y()),
+                             static_cast<float>(c.Z()));
+        BRepGProp_Face gpf(f);
+        double u1, u2, v1, v2;
+        gpf.Bounds(u1, u2, v1, v2);
+        gp_Pnt p;
+        gp_Vec nv;
+        gpf.Normal(0.5 * (u1 + u2), 0.5 * (v1 + v2), p, nv);
+        if (nv.Magnitude() > 1e-9) {
+            m_normal = glm::normalize(glm::vec3(static_cast<float>(nv.X()),
+                                                static_cast<float>(nv.Y()),
+                                                static_cast<float>(nv.Z())));
+            m_hasHandle = true;
+        }
+    } catch (...) {}
+    return body;
+}
+
+std::unique_ptr<Operation> OffsetFaceController::buildOp(const IopContext&) {
+    if (m_faces.empty() || std::abs(m_distance) < 0.01f) return nullptr;
+    auto op = std::make_unique<OffsetFaceOp>();
+    op->setBody(bodyId());
+    for (const auto& f : m_faces) op->addFace(f);
+    op->setDistance(static_cast<double>(m_distance));
+    op->setRemoveBlends(m_removeBlends);
+    return op;
+}
+
+// Claim on left-down ONLY when the cursor is near the visible arrow (same
+// hit-test and camera-facing-plane drag as EdgeOpController, wider pick
+// radius for a finger). A click anywhere else leaves the handle unlatched, so
+// the camera keeps the drag and orbits as usual.
+void OffsetFaceController::onViewportInput(const IopViewport& vp,
+                                           const IopContext& ctx) {
+    if (!active() || !m_hasHandle) return;
+
+    if (vp.clicked) {
+        auto distToSeg = [&](glm::vec2 a, glm::vec2 b) {
+            glm::vec2 d = b - a;
+            float len2 = glm::dot(d, d);
+            glm::vec2 q;
+            if (len2 < 1e-6f) q = vp.mouse - a;
+            else {
+                float t = glm::clamp(glm::dot(vp.mouse - a, d) / len2, 0.0f, 1.0f);
+                q = vp.mouse - (a + t * d);
+            }
+            return glm::length(q);
+        };
+        glm::vec2 cs, st;
+        // Hit radius in PHYSICAL pixels: ImGui runs at device resolution
+        // here (fonts are 15 * uiScale). Wider than EdgeOp's 20/30 - an
+        // offset arrow is the whole gesture on touch, so it gets a fatter
+        // grab zone (48 dp) than a mouse does.
+        const float pick = (ctx.panel.imTouch ? 48.0f : 20.0f) *
+                           ctx.panel.uiScale;
+        if (offsetArrowScreen(vp.toScreen, m_origin, m_normal, m_distance, cs, st) &&
+            distToSeg(cs, st) < pick)
+            m_dragging = true;
+        setDraggingHandle(m_dragging);
+    }
+
+    if (m_dragging && vp.dragging) {
+        // Signed distance along the outward arrow, measured on a plane
+        // through the face centre facing the camera (same construction as
+        // EdgeOpController). Dragging with the arrow grows a positive
+        // distance; dragging back through the face goes negative (pull in).
+        glm::vec3 camFwd = glm::normalize(vp.camTarget - vp.camPos);
+        float denom = glm::dot(vp.rayDir, camFwd);
+        if (std::abs(denom) > 1e-6f) {
+            float t = glm::dot(m_origin - vp.rayOrigin, camFwd) / denom;
+            glm::vec3 hit = vp.rayOrigin + vp.rayDir * t;
+            float proj = glm::dot(hit - m_origin, m_normal);
+            // Zero is "no change" - don't re-run the preview (or store a
+            // sub-0.01 noise value) while the cursor crosses the face.
+            if (std::abs(proj) >= 0.01f) {
+                m_distance = static_cast<float>(materializr::quantiseDragMm(proj));
+                materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+                update(ctx);
+            }
+        }
+    } else if (m_dragging && !vp.down) {
+        m_dragging = false; // re-claim required for the next drag
+        setDraggingHandle(false);
+    }
+}
+
+void OffsetFaceController::drawOverlay(const IopOverlay& ov) const {
+    if (!active() || !m_hasHandle || !ov.toScreen || !ov.triangle) return;
+    const unsigned kOutline = 0xE61C1414u;   // 0xAABBGGRR
+    const unsigned kAmber   = 0xFF3CC8FFu;
+
+    // Single-head arrow from the face centre along the outward normal. The
+    // line IS the click target (onViewportInput hit-tests this same line).
+    // Signed distance: the arrow always points OUT; a negative value drags
+    // the face in the other direction.
+    // Sizes in dp: a 3 px line is ~0.2 mm on a 440 dpi tablet.
+    const float sc = materializr::uiScale();
+    auto arrow = [&](glm::vec2 a, glm::vec2 b, unsigned col, bool grabbed) {
+        glm::vec2 d = b - a;
+        float len = glm::length(d);
+        if (len < 4.0f) return;
+        d /= len;
+        glm::vec2 perp(-d.y, d.x);
+        const float thick = (grabbed ? 7.0f : 5.0f) * sc;
+        const float ah    = (grabbed ? 26.0f : 22.0f) * sc;
+        ov.line(a, b, kOutline, thick + 2.0f);
+        ov.line(a, b, col, thick);
+        glm::vec2 base = b - d * ah;
+        glm::vec2 w1 = base + perp * (ah * 0.5f);
+        glm::vec2 w2 = base - perp * (ah * 0.5f);
+        // Slightly oversized halo behind the head.
+        glm::vec2 hb = base - d * 1.6f;
+        glm::vec2 hw1 = hb + perp * (ah * 0.5f + 1.6f);
+        glm::vec2 hw2 = hb - perp * (ah * 0.5f + 1.6f);
+        ov.triangle(b + d * 1.6f, hw1, hw2, kOutline);
+        ov.triangle(b, w1, w2, col);
+    };
+
+    glm::vec2 sa, sb;
+    if (offsetArrowScreen(ov.toScreen, m_origin, m_normal, m_distance, sa, sb))
+        arrow(sa, sb, kAmber, m_dragging);
+
+    // The readout follows the CURSOR, not the tip (same as EdgeOp).
+    if (ov.rect && ov.text && ov.textSize) {
+        char dbuf[40];
+        std::snprintf(dbuf, sizeof(dbuf), "%s",
+                      materializr::fmtLength(m_distance).c_str());
+        glm::vec2 ts = ov.textSize(dbuf);
+        glm::vec2 tp(ov.mouse.x + 14.0f, ov.mouse.y - ts.y * 0.5f);
+        glm::vec2 mn(tp.x - 5, tp.y - 3), mx(tp.x + ts.x + 5, tp.y + ts.y + 3);
+        ov.rect(mn, mx, 0xEB1C1414u, 3.0f, 0.0f);
+        ov.rect(mn, mx, kAmber, 3.0f, m_dragging ? 2.5f : 1.5f);
+        ov.text(tp, dbuf, kAmber);
+    }
+}
+
+void OffsetFaceController::panelBody(const IopContext& ctx, bool& changed) {
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
+    ImGui::TextDisabled("%s", materializr::tr("Moves the selected face(s) in or out along their normal. Drag the arrow on the face, or type a distance - negative pulls the face in."));
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+
+    if (ctx.cornerCommitUi) {
+        // im-touch: number-pad amount field - no InputText, no native
+        // keyboard (which froze the app on iOS). Signed: a face can move in.
+        if (materializr::amountLengthField("offsetAmt", nullptr, &m_distance,
+                                           /*allowSign=*/true,
+                                           -1000.0f, 1000.0f)) {
+            materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+            changed = true;
+        }
+    } else {
+    if (m_inputFocus) {
+        ImGui::SetKeyboardFocusHere();
+        m_inputFocus = false;
+    }
+    ImGui::SetNextItemWidth(140);
+    // The member is the truth; the buffer follows it unless being typed in.
+    materializr::reseedLengthBufferIfIdle("##offsetDist", m_inputBuf, sizeof(m_inputBuf), m_distance);
+    if (materializr::inputNumberText("##offsetDist", m_inputBuf, sizeof(m_inputBuf),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        (void)materializr::parseLength(m_inputBuf, m_distance);
+        requestCommit();
+    } else if (materializr::lengthBufferIsActive("##offsetDist")) {
+        // Only while the user is typing. Parsing an IDLE buffer wrote the
+        // buffer's rounded text back over a more precise member.
+        float parsed = m_distance;
+        if (materializr::parseLength(m_inputBuf, parsed) &&
+            std::abs(parsed - m_distance) > 0.001f) {
+            m_distance = parsed;
+            changed = true;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::Text("%s", materializr::unitSuffix());
+    }
+
+    if (materializr::lengthStepperRow("offsetStep", &m_distance,
+                                /*allowNegative=*/true, -1000.0f, 1000.0f)) {
+        materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+        changed = true;
+    }
+
+    if (ImGui::Checkbox(materializr::tr("Remove adjacent fillets/chamfers"),
+                        &m_removeBlends))
+        changed = true;
+    ImGui::TextDisabled("%s", materializr::tr("only when moving outwards"));
+
+    if (previewOk()) {
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "%s",
+                           materializr::trFormat("Previewing %s",
+                               materializr::fmtLength(m_distance).c_str()).c_str());
+    } else {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s",
+            materializr::tr("No preview: the offset failed at this distance. Try a smaller step, or untick blend removal."));
+        ImGui::PopTextWrapPos();
+    }
+}
+
+void OffsetFaceController::onCleanup() {
+    m_faces.clear();
+    m_dragging = false;
+    m_hasHandle = false;
+    m_inputFocus = true;
+}
 
 // ─── Project Sketch ──────────────────────────────────────────────────────────
 

@@ -89,6 +89,37 @@ private:
     std::vector<TopoDS_Face> m_faces;
 };
 
+// ─── Offset Face ─────────────────────────────────────────────────────────────
+// Move the picked face(s) in or out along their outward normal (OffsetFaceOp),
+// with an on-face drag arrow: grab the arrow to drag, miss it and the camera
+// orbits. Adjacent fillets/chamfers can come off first so the face moves and
+// the round comes back sharp.
+class OffsetFaceController : public InteractiveOpController {
+protected:
+    const char* title() const override { return "Offset Face"; }
+    int onBegin(const IopContext& ctx) override;
+    std::unique_ptr<Operation> buildOp(const IopContext& ctx) override;
+    bool previewOffThread() const override { return true; }
+    void panelBody(const IopContext& ctx, bool& changed) override;
+    void onCleanup() override;
+    float panelWidth() const override { return 280.0f; }
+    bool wantsViewportInput() const override { return true; }
+    void onViewportInput(const IopViewport& vp, const IopContext& ctx) override;
+    void drawOverlay(const IopOverlay& ov) const override;
+
+private:
+    std::vector<TopoDS_Face> m_faces;
+    float m_distance = 5.0f;
+    bool  m_removeBlends = true;
+    char  m_inputBuf[32] = "5.0";
+    bool  m_inputFocus = true;
+    // Arrow frame: face-centre origin + outward normal of the first face.
+    glm::vec3 m_origin{0.0f};
+    glm::vec3 m_normal{0.0f, 0.0f, 1.0f};
+    bool m_hasHandle = false;
+    bool m_dragging = false;
+};
+
 // ─── Project Sketch ──────────────────────────────────────────────────────────
 // Project a sketch onto the picked face along the sketch normal, then
 // engrave or emboss the projected regions - text wrapped onto a cylinder.
