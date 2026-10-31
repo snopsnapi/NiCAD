@@ -87,6 +87,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/TaperOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ScaleFaceOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/DefeatureOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/OffsetFace.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/MergeFacesOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ResizeCylindricalOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/CombineSketchesOp.cpp
@@ -740,6 +741,12 @@ add_test(NAME test_topo_chamfer_gen COMMAND test_topo_chamfer_gen)
 add_executable(test_chamfer_at_limit test_chamfer_at_limit.cpp)
 target_link_libraries(test_chamfer_at_limit PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_chamfer_at_limit COMMAND test_chamfer_at_limit)
+
+# test_offset_face - Offset Face core: face normal offset with neighbour
+# extension, adjacent blend removal on outward moves (Fusion-style)
+add_executable(test_offset_face test_offset_face.cpp)
+target_link_libraries(test_offset_face PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_offset_face COMMAND test_offset_face)
 
 # test_cascade_applied_only - the sketch cascade must not replay from a step above the undo tip
 add_executable(test_cascade_applied_only test_cascade_applied_only.cpp)
