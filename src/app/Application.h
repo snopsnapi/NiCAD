@@ -1698,6 +1698,7 @@ private:
     ScaleFaceController m_scaleFaceCtl;
     ProjectSketchController m_projectSketchCtl;
     DefeatureController m_defeatureCtl;
+    OffsetFaceController m_offsetFaceCtl;
     ResizeCylindricalController m_resizeCylCtl;
     ExtrudeController m_extrudeCtl;
     PushPullController m_ppCtl;
@@ -1706,9 +1707,10 @@ private:
     // once its lifecycle overrides landed, so every generic loop - Esc/Enter
     // chains, single-flight, suppression, input/overlay/gizmo dispatch -
     // covers Move Face without a special case.
-    std::array<InteractiveOpController*, 11> m_iops{
+    std::array<InteractiveOpController*, 12> m_iops{
         &m_shellCtl, &m_taperCtl, &m_scaleFaceCtl, &m_projectSketchCtl,
-        &m_defeatureCtl, &m_resizeCylCtl, &m_moveFaceCtl, &m_extrudeCtl,
+        &m_defeatureCtl, &m_offsetFaceCtl, &m_resizeCylCtl, &m_moveFaceCtl,
+        &m_extrudeCtl,
         &m_ppCtl, &m_edgeCtl, &m_splitCtl};
     IopContext iopContext();
     bool anyIopActive() const {

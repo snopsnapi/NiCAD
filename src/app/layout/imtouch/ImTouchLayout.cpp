@@ -64,6 +64,7 @@ const char* stepIcon(const std::string& t) {
     if (t == "split_body")                 return MZ_ICON_TRIM;
     if (t == "delete")                     return MZ_ICON_DELETE;
     if (t == "defeature")                  return MZ_ICON_REPAIR;
+    if (t == "offset_face")                return MZ_ICON_PUSHPULL;
     if (t == "mirror")                     return MZ_ICON_MIRROR;
     if (t == "pattern")                    return MZ_ICON_PATTERN;
     if (t == "copy" || t == "duplicate_sketch")
@@ -864,7 +865,8 @@ void Application::renderImTouchLayout() {
                                t.action == ToolAction::Scale) {
                         transform.push_back(&t); continue;
                     } else if (t.action == ToolAction::MergeFaces ||
-                               t.action == ToolAction::RemoveFace) {
+                               t.action == ToolAction::RemoveFace ||
+                               t.action == ToolAction::OffsetFace) {
                         repair.push_back(&t); continue;
                     }
                     flatButton(t, railIdx++);

@@ -2965,6 +2965,11 @@ void Application::handleToolAction(int action) {
             break;
         }
 
+        case ToolAction::OffsetFace: {
+            beginIop(m_offsetFaceCtl);
+            break;
+        }
+
         case ToolAction::MergeFaces: {
             auto trackBodies = trackBodyChanges(); // re-tessellate only what changes
             // The repair half of #81, for geometry that was ALREADY split when
