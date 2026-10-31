@@ -1,0 +1,108 @@
+name: Geometry Tests (nikaishi)
+
+on:
+  push:
+    branches: [nikaishi]
+    paths-ignore: ['**.md', 'tasks/**', 'docs/**', 'android/**']
+  workflow_dispatch:
+
+concurrency:
+  group: tests-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  geometry-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      # Space-separated test target names; each is an add_executable in
+      # tests/CMakeLists.txt. Add new tests as one more word here.
+      TEST_TARGETS: "test_blend_cut test_chamfer_at_limit"
+      CCACHE_DIR: /home/runner/.ccache   # Ubuntu 24.04 default is ~/.cache/ccache
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same apt set as the Dockerfile builder stage (minus the AppImage-only
+      # file/patchelf/fuse/libfuse2/imagemagick/zsync), plus ninja + ccache.
+      # GLEW is NOT here: the top-level CMakeLists gates find_package(GLEW) on
+      # WIN32 only (vcpkg), so Linux needs no libglew-dev.
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              build-essential cmake git wget ca-certificates \
+              libfreetype-dev libfontconfig1-dev \
+              libgl-dev libglu1-mesa-dev \
+              libx11-dev libxext-dev libxmu-dev libxt-dev \
+              libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libxkbcommon-dev libwayland-dev pkg-config \
+              libxfixes-dev libegl-dev libudev-dev libdbus-1-dev \
+              libwayland-bin libdecor-0-dev \
+              libcurl4-openssl-dev \
+              zlib1g-dev \
+              ninja-build ccache
+
+      # OCCT 7.9.3 from source, same pin + sha256 + cmake flags as the
+      # Dockerfile (identical to android/scripts/setup-deps.sh). Cached so a
+      # green run does not pay the ~30 min cold build again.
+      - name: Restore OCCT prefix
+        id: occt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/occt-linux
+          key: occt-linux-V7_9_3-v1
+
+      - name: Build OpenCASCADE 7.9.3
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q "https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V7_9_3.tar.gz" -O /tmp/occt.tar.gz
+          echo "5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57  /tmp/occt.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/occt && tar -xzf /tmp/occt.tar.gz -C /tmp/occt --strip-components=1
+          cmake -S /tmp/occt -B /tmp/occt-build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX="$HOME/occt-linux" \
+              -DBUILD_LIBRARY_TYPE=Shared \
+              -DBUILD_MODULE_Draw=OFF -DBUILD_DOC_Overview=OFF -DBUILD_SAMPLES_QT=OFF \
+              -DUSE_FREETYPE=ON -DUSE_TK=OFF -DUSE_TCL=OFF \
+              -DUSE_FREEIMAGE=OFF -DUSE_TBB=OFF -DUSE_VTK=OFF -DUSE_RAPIDJSON=OFF \
+              -DUSE_OPENVR=OFF -DUSE_DRACO=OFF -DUSE_FFMPEG=OFF
+          cmake --build /tmp/occt-build --target install -j4
+          rm -rf /tmp/occt /tmp/occt-build /tmp/occt.tar.gz
+
+      # Save right away, so a later test failure does not throw away the OCCT
+      # build (same pattern as android.yml).
+      - name: Save OCCT prefix
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/occt-linux
+          key: occt-linux-V7_9_3-v1
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
+            -DMZR_OCCT_PREFIX="$HOME/occt-linux" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build test targets
+        run: cmake --build build --target $TEST_TARGETS -j4
+
+      # tests/CMakeLists.txt already stamps LD_LIBRARY_PATH onto every ctest
+      # when MZR_OCCT_PREFIX is set; exporting it here as well keeps the run
+      # working even if that mechanism changes.
+      - name: Run tests
+        run: |
+          export LD_LIBRARY_PATH="$HOME/occt-linux/lib:$LD_LIBRARY_PATH"
+          for t in $TEST_TARGETS; do
+            ctest --test-dir build -R "^${t}$" --output-on-failure --no-tests=error
+          done
