@@ -104,6 +104,8 @@ jobs:
       - name: Run tests
         run: |
           export LD_LIBRARY_PATH="$HOME/occt-linux/lib:$LD_LIBRARY_PATH"
+          failed=""
           for t in $TEST_TARGETS; do
-            ctest --test-dir build -R "^${t}$" --output-on-failure --no-tests=error
+            ctest --test-dir build -R "^${t}$" --output-on-failure --no-tests=error || failed="$failed $t"
           done
+          if [ -n "$failed" ]; then echo "FAILED TARGETS:$failed"; exit 1; fi

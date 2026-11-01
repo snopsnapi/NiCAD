@@ -167,8 +167,9 @@ TEST(FitSpline, SketchInterpolate2D) {
     const std::vector<glm::vec2> samp =
         Sketch::interpolate2D(ctrl, 8, false, &spanStart);
 
-    // One span-start per control point plus the trailing end marker.
-    ASSERT_EQ(spanStart.size(), ctrl.size() + 1);
+    // Open: n-1 span starts plus the trailing end marker = one entry per
+    // control point (the marker indexes the last sample = the last point).
+    ASSERT_EQ(spanStart.size(), ctrl.size());
     for (size_t i = 0; i < ctrl.size(); ++i) {
         ASSERT_LT(static_cast<size_t>(spanStart[i]), samp.size());
         EXPECT_NEAR(glm::length(samp[static_cast<size_t>(spanStart[i])] - ctrl[i]),
