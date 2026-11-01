@@ -3229,6 +3229,15 @@ void Application::handleShortcuts() {
         }
     }
 #if defined(__ANDROID__)
+    // Stylus side button -> radial sketch menu at the pen's last position.
+    if (materializr::androidPollStylusButton() > 0 && m_inSketchMode && m_sketchTool) {
+        const ImVec2 mp = ImGui::GetMousePos();
+        const ImVec2 ds = ImGui::GetIO().DisplaySize;
+        const bool valid = mp.x > -1e5f && mp.y > -1e5f;
+        m_stylusMenuX = valid ? mp.x : ds.x * 0.5f;
+        m_stylusMenuY = valid ? mp.y : ds.y * 0.5f;
+        m_stylusMenuOpen = !m_stylusMenuOpen;   // second press closes it
+    }
     // Android "Back" (right-edge swipe / back key) = touch Undo, one step per gesture.
     for (int n = materializr::androidPollBackGesture(); n > 0; --n) {
         if (m_edgeCtl.active() || m_extrudeCtl.active() || m_ppCtl.active() ||

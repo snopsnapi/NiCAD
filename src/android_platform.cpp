@@ -179,6 +179,22 @@ int androidPollBackGesture() {
     return n;
 }
 
+int androidPollStylusButton() {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    jobject act = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (!env || !act) return 0;
+    int n = 0;
+    jclass cls = env->GetObjectClass(act);
+    if (cls) {
+        jmethodID mid = env->GetStaticMethodID(cls, "pollStylusButton", "()I");
+        if (mid) n = static_cast<int>(env->CallStaticIntMethod(cls, mid));
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cls);
+    }
+    env->DeleteLocalRef(act);
+    return n;
+}
+
 void androidSetFullscreen(bool on) {
     static int last = -1;               // -1: never told Java yet
     if (last == (on ? 1 : 0)) return;
@@ -207,6 +223,7 @@ namespace materializr {
 void androidInitRuntime() {}
 int androidTopInsetPx() { return 0; }
 int androidPollBackGesture() { return 0; }
+int androidPollStylusButton() { return 0; }
 void androidSetFullscreen(bool) {}
 }
 

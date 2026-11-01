@@ -992,6 +992,11 @@ private:
     // frame: the sketch input routing checks it so the same tap can't also
     // pick geometry underneath (mirrors m_dimEditingClickedThisFrame).
     bool m_constraintIconClickedThisFrame = false;
+    // Stylus side-button radial menu (sketch mode): Select, Parallel,
+    // Tangent, Perpendicular, Dimension. Centre in screen px.
+    bool  m_stylusMenuOpen = false;
+    float m_stylusMenuX = 0.0f, m_stylusMenuY = 0.0f;
+    void  renderStylusRadialMenu();
 
     std::unique_ptr<SketchSolver> m_sketchSolver;
     std::unique_ptr<SketchTool> m_sketchTool;

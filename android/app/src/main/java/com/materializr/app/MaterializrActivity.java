@@ -187,6 +187,29 @@ public class MaterializrActivity extends SDLActivity {
     // Native (android_platform.cpp) polls this once per frame.
     public static int pollBackGesture() { return sPendingBack.getAndSet(0); }
 
+    // ---- Stylus button (Xiaomi Focus Pen: its side button is a Bluetooth HID
+    // keyboard sending F19, scan code 189) -> native radial menu. Counted here,
+    // consumed by native pollStylusButton() once per frame.
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingStylus =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+    public static int pollStylusButton() { return sPendingStylus.getAndSet(0); }
+
+    private static boolean isStylusMenuKey(android.view.KeyEvent e) {
+        return e.getScanCode() == 189 ||
+               "KEYCODE_F19".equals(android.view.KeyEvent.keyCodeToString(e.getKeyCode()));
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        if (isStylusMenuKey(event)) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN &&
+                event.getRepeatCount() == 0)
+                sPendingStylus.incrementAndGet();
+            return true;   // never reaches SDL as a keypress
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
     // Raise the soft keyboard directly. SDL_StartTextInput only shows the IME
     // when SDL_GetFocusWindow() is non-null, which it isn't in our immersive
     // surface - so SDL never calls this. Driving showTextInput (inherited from

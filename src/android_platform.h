@@ -22,6 +22,10 @@ int androidTopInsetPx();
 // one is an Undo request. Always 0 off Android. Call once per frame.
 int androidPollBackGesture();
 
+// Presses of the stylus side button (Xiaomi Focus Pen: F19) since the last
+// call - opens the sketch radial menu. Always 0 off Android.
+int androidPollStylusButton();
+
 // True in the Android build. Lets settings UI for Android-only options be
 // compiled (and type-checked) on every platform instead of hiding behind #ifdef.
 #ifdef __ANDROID__

@@ -8192,6 +8192,9 @@ void Application::renderViewport() {
         ImGui::EndPopup();
     }
 
+    // Stylus side-button radial menu (fork).
+    renderStylusRadialMenu();
+
     // Sketch constraint context menu - appears on right-click in the sketch
     // viewport when at least one sketch element is selected. Items are filtered
     // by selection arity so the user never sees an option that can't apply
@@ -8821,3 +8824,98 @@ bool Application::captureViewportPng(std::vector<uint8_t>& pngOut) {
 }
 
 } // namespace materializr
+
+
+// ── Stylus radial menu (fork) ────────────────────────────────────────────────
+// Opened by the pen's side button (Application.cpp, androidPollStylusButton) at
+// the pen's last position. A transparent full-screen window sits on top while
+// it is open, so the tap that picks an item never reaches the sketch below.
+// Tap an item -> that tool; tap anywhere else -> close.
+void Application::renderStylusRadialMenu() {
+    if (!m_stylusMenuOpen) return;
+    if (!m_inSketchMode || !m_sketchTool) { m_stylusMenuOpen = false; return; }
+
+    struct Item { const char* label; int kind; ConstraintType type; };
+    // kind: 0 = Select, 1 = constraint tool, 2 = Dimension
+    static const Item items[] = {
+        {"Select",        0, ConstraintType::Parallel},
+        {"Parallel",      1, ConstraintType::Parallel},
+        {"Tangent",       1, ConstraintType::Tangent},
+        {"90°",    1, ConstraintType::Perpendicular},
+        {"Dimension",     2, ConstraintType::Parallel},
+    };
+    const int n = static_cast<int>(sizeof(items) / sizeof(items[0]));
+
+    const float dp = uiScale();
+    const float ringR = 92.0f * dp;    // item centres
+    const float itemR = 36.0f * dp;    // item discs (fingertip/pen target)
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    // Keep the whole ring on screen.
+    const float margin = ringR + itemR + 4.0f * dp;
+    ImVec2 c(std::clamp(m_stylusMenuX, margin, std::max(margin, ds.x - margin)),
+             std::clamp(m_stylusMenuY, margin, std::max(margin, ds.y - margin)));
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ds);
+    ImGui::SetNextWindowFocus();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const ImGuiWindowFlags fl = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse;
+    if (ImGui::Begin("##StylusRadial", nullptr, fl)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // Whole window is one invisible button so ImGui owns every tap here.
+        ImGui::SetCursorScreenPos(ImVec2(0, 0));
+        ImGui::InvisibleButton("##radialCatch", ds);
+        const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        const ImVec2 mouse = ImGui::GetMousePos();
+
+        const ImU32 bg = IM_COL32(26, 28, 38, 235);
+        const ImU32 edge = IM_COL32(90, 96, 112, 255);
+        const ImU32 txt = IM_COL32(238, 243, 252, 255);
+        const ImU32 hot = ImGui::ColorConvertFloat4ToU32(materializr::accentText());
+        dl->AddCircleFilled(c, 10.0f * dp, bg);
+        dl->AddCircle(c, 10.0f * dp, edge, 0, 1.5f * dp);
+
+        int hit = -1;
+        for (int i = 0; i < n; ++i) {
+            const float a = -1.5707963f + 6.2831853f * static_cast<float>(i) / n;
+            const ImVec2 p(c.x + ringR * std::cos(a), c.y + ringR * std::sin(a));
+            const float dx = mouse.x - p.x, dy = mouse.y - p.y;
+            const bool over = dx * dx + dy * dy <= itemR * itemR;
+            if (over) hit = i;
+            bool active = false;
+            const SketchToolMode m = m_sketchTool->getMode();
+            if (items[i].kind == 0) active = (m == SketchToolMode::Select);
+            else if (items[i].kind == 2) active = (m == SketchToolMode::Dimension);
+            else active = (m == SketchToolMode::Constrain && m_constrainType == items[i].type);
+            dl->AddCircleFilled(p, itemR, bg);
+            dl->AddCircle(p, itemR, active ? hot : edge, 0, (active ? 2.5f : 1.2f) * dp);
+            const ImVec2 ts = ImGui::CalcTextSize(items[i].label);
+            dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y - ts.y * 0.5f), active ? hot : txt,
+                        items[i].label);
+        }
+
+        if (clicked) {
+            if (hit >= 0) {
+                const Item& it = items[hit];
+                if (it.kind == 0) {
+                    handleToolAction(static_cast<int>(ToolAction::SelectSketch));
+                } else if (it.kind == 2) {
+                    handleToolAction(static_cast<int>(ToolAction::SketchDimension));
+                } else {
+                    // Set (never toggle off) the constraint tool.
+                    m_constrainType = it.type;
+                    m_constrainHasFirst = false;
+                    m_constrainFirstId = -1;
+                    m_selectedConstraintId = -1;
+                    m_sketchTool->setMode(SketchToolMode::Constrain);
+                }
+            }
+            m_stylusMenuOpen = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
