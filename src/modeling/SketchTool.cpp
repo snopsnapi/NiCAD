@@ -1097,7 +1097,11 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     //   allowDirectional - perp/parallel-to-prev, angle, on-line-extension,
     //                      tangent, axis-from-point. ON for both Full & Reduced.
     //   allowCharge      - hover-to-charge references (Full only).
-    const bool allowSnaps       = (m_inferenceLevel != InferenceLevel::Off);
+    // Fork, touch: CONTACT snaps (points, on-line / on-curve) stay on even
+    // with inference Off - Off then only silences the directional guides
+    // (axes, angles, perpendicular...). On a tablet you tap to attach.
+    const bool contactOff = (m_inferenceLevel == InferenceLevel::Off) && !touchMode();
+    const bool allowSnaps       = !contactOff;
     const bool allowDirectional = (m_inferenceLevel != InferenceLevel::Off);
     const bool allowCharge      = (m_inferenceLevel == InferenceLevel::Full ||
                                    m_inferenceLevel == InferenceLevel::Max);
@@ -1226,7 +1230,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
         float r = static_cast<float>(c.radius);
         if (std::abs(dist - r) < curveSnapThreshold) {
             // Off: curve perimeter never snaps (endpoint + grid only).
-            if (m_inferenceLevel == InferenceLevel::Off) continue;
+            if (contactOff) continue;
             // Full / Max: land where the curve crosses a grid line (on-curve
             // AND grid-aligned). Falls through to the plain perimeter point if
             // no grid crossing sits near the cursor.
@@ -1256,7 +1260,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
         if (dist < 1e-6f) continue;
         float r = static_cast<float>(a.radius);
         if (std::abs(dist - r) < curveSnapThreshold) {
-            if (m_inferenceLevel == InferenceLevel::Off) continue;
+            if (contactOff) continue;
 
             // Compute arc span so perimeter snaps are limited to the actual arc,
             // not the extended full circle. Same convention as the midpoint calc.
@@ -1301,7 +1305,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     // Face-reference circular / arc edges - continuous perimeter snapping for
     // in-plane host/neighbour circles (hole rims, fillet arcs). Mirrors the
     // sketch-circle behaviour: grid wins ties; never fires when inference is Off.
-    if (m_inferenceLevel != InferenceLevel::Off) {
+    if (!contactOff) {
         const float TWO_PI = 2.0f * static_cast<float>(M_PI);
         for (const auto& fc : m_sketch->getFaceReferences().circles) {
             glm::vec2 v = pos - fc.center;
@@ -1364,7 +1368,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     // snap below - on an asymmetric face (thread runout bites a chunk out
     // of a cap) the area centroid sits visibly OFF the axis, and Steve
     // hunting the cylinder centre kept landing on that shifted point.
-    if (allowSnaps && m_inferenceLevel != InferenceLevel::Off) {
+    if (allowSnaps) {
         for (const auto& fc : m_sketch->getFaceReferences().circles) {
             if (glm::length(pos - fc.center) < pointSnapThreshold)
                 return fc.center;

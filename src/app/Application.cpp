@@ -7457,6 +7457,9 @@ void Application::editSketch(int sketchId) {
     m_sketchTool->setSketch(m_activeSketch.get());
     m_sketchTool->setSolver(m_sketchSolver.get());
     m_sketchSolver->setSketch(m_activeSketch.get());
+    // Fork: isSatisfied is not saved - refresh it (constraint icons read red
+    // after every load otherwise).
+    if (!m_activeSketch->getConstraints().empty()) m_sketchSolver->solve(*m_activeSketch);
     // When re-entering an existing sketch the user is much more likely to want
     // to tweak it than draw fresh geometry; start in Select/Move mode so they
     // can immediately click & drag points/lines.
@@ -7953,6 +7956,7 @@ void Application::restoreSketchDraftNow() {
         m_activeSketch->setSourceBody(meta.sourceBodyId);
     });
     m_sketchSolver->setSketch(m_activeSketch.get());
+    if (!m_activeSketch->getConstraints().empty()) m_sketchSolver->solve(*m_activeSketch);
     m_sketchTool->setSketch(m_activeSketch.get());
     alignCameraToActiveSketch();
     m_meshesDirty = true;
