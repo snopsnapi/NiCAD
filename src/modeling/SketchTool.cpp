@@ -326,7 +326,92 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
                         m_activeInferences.push_back(
                             {InferenceGuide::Endpoint, tp->pos, tp->pos, best});
                     } else {
+                        // Fork: second magnet - anywhere ALONG a line, circle,
+                        // arc or spline (not only its points). A circle/arc hit
+                        // also sticks the point to the rim (it then rides it via
+                        // slideOrRelease until pulled clear).
                         inferred = target;
+                        const float curveR = 14.0f * uiScale() * m_mmPerPixel;
+                        float bestC = curveR;
+                        int rimId = -1;
+                        glm::vec2 hitPos = target;
+                        bool hit = false;
+                        const int dragId = m_dragPointId;
+                        for (const auto& ln : m_sketch->getLines()) {
+                            if (ln.startPointId == dragId || ln.endPointId == dragId) continue;
+                            const SketchPoint* a = m_sketch->getPoint(ln.startPointId);
+                            const SketchPoint* b = m_sketch->getPoint(ln.endPointId);
+                            if (!a || !b) continue;
+                            const glm::vec2 ab = b->pos - a->pos;
+                            const float l2 = glm::dot(ab, ab);
+                            if (l2 < 1e-12f) continue;
+                            const float t = glm::clamp(glm::dot(target - a->pos, ab) / l2, 0.0f, 1.0f);
+                            const glm::vec2 q = a->pos + ab * t;
+                            const float d = glm::length(target - q);
+                            if (d < bestC) { bestC = d; hitPos = q; rimId = -1; hit = true; }
+                        }
+                        for (const auto& c : m_sketch->getCircles()) {
+                            if (c.centerPointId == dragId) continue;
+                            const SketchPoint* ctr = m_sketch->getPoint(c.centerPointId);
+                            if (!ctr) continue;
+                            const glm::vec2 v = target - ctr->pos;
+                            const float dc = glm::length(v);
+                            if (dc < 1e-6f) continue;
+                            const float d = std::abs(dc - float(c.radius));
+                            if (d < bestC) {
+                                bestC = d; hitPos = ctr->pos + v / dc * float(c.radius);
+                                rimId = c.id; hit = true;
+                            }
+                        }
+                        for (const auto& a : m_sketch->getArcs()) {
+                            if (a.centerPointId == dragId || a.startPointId == dragId ||
+                                a.endPointId == dragId) continue;
+                            const SketchPoint* ctr = m_sketch->getPoint(a.centerPointId);
+                            const SketchPoint* sp = m_sketch->getPoint(a.startPointId);
+                            const SketchPoint* ep = m_sketch->getPoint(a.endPointId);
+                            if (!ctr || !sp || !ep) continue;
+                            const glm::vec2 v = target - ctr->pos;
+                            const float dc = glm::length(v);
+                            if (dc < 1e-6f) continue;
+                            const float TWO_PI = 6.2831853f;
+                            const float a0 = std::atan2(sp->pos.y - ctr->pos.y, sp->pos.x - ctr->pos.x);
+                            float sweep = std::atan2(ep->pos.y - ctr->pos.y, ep->pos.x - ctr->pos.x) - a0;
+                            while (sweep < 0.0f) sweep += TWO_PI;
+                            float ang = std::atan2(v.y, v.x) - a0;
+                            while (ang < 0.0f) ang += TWO_PI;
+                            if (ang > sweep) continue;
+                            const float d = std::abs(dc - float(a.radius));
+                            if (d < bestC) {
+                                bestC = d; hitPos = ctr->pos + v / dc * float(a.radius);
+                                rimId = a.id; hit = true;
+                            }
+                        }
+                        for (const auto& sp : m_sketch->getSplines()) {
+                            bool own = false;
+                            for (int cp : sp.controlPointIds)
+                                if (cp == dragId) { own = true; break; }
+                            if (own || sp.controlPointIds.size() < 2) continue;
+                            const std::vector<glm::vec2> samp = m_sketch->sampleSpline2D(sp, 24);
+                            for (size_t k = 0; k + 1 < samp.size(); ++k) {
+                                const glm::vec2 ab = samp[k + 1] - samp[k];
+                                const float l2 = glm::dot(ab, ab);
+                                if (l2 < 1e-12f) continue;
+                                const float t = glm::clamp(glm::dot(target - samp[k], ab) / l2, 0.0f, 1.0f);
+                                const glm::vec2 q = samp[k] + ab * t;
+                                const float d = glm::length(target - q);
+                                if (d < bestC) { bestC = d; hitPos = q; rimId = -1; hit = true; }
+                            }
+                        }
+                        if (hit) {
+                            inferred = hitPos;
+                            if (rimId >= 0) {
+                                m_sketch->setPointOnCurve(dragId, rimId);
+                                noteRimGuide(hitPos, rimId);
+                            } else {
+                                m_activeInferences.push_back(
+                                    {InferenceGuide::OnLine, hitPos, hitPos, -1});
+                            }
+                        }
                     }
                 } else {
                     inferred = snap(target);
@@ -1036,6 +1121,13 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     float pointSnapThreshold =
         (gridSnapOnForBand ? tolStep() * 0.6f : 0.25f) * snapScale();
     float curveSnapThreshold = pointSnapThreshold; // same band for circle/arc perimeters
+    // Fork, touch: the bands above are in sketch mm, which on the tablet came
+    // out at a couple of pixels - only exact point hits ever snapped, lines /
+    // circles / splines never did. Floor them at a fingertip/pen size in dp.
+    if (touchMode() && m_mmPerPixel > 0.0f) {
+        pointSnapThreshold = std::max(pointSnapThreshold, 20.0f * uiScale() * m_mmPerPixel);
+        curveSnapThreshold = std::max(curveSnapThreshold, 14.0f * uiScale() * m_mmPerPixel);
+    }
 
     // Without a sketch only grid snap can apply.
     if (!m_sketch) {
@@ -1488,8 +1580,10 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     // not the looser kPointingRadiusPx) - registering a point ON a curve
     // joins topology, same as welding one onto another point.
     const float onLineThresh =
-        std::max(pointSnapThreshold * 0.7f,
-                 std::min(kWeldRadiusPx * m_mmPerPixel, kWeldRadiusCapMm));
+        (touchMode() && m_mmPerPixel > 0.0f)
+            ? curveSnapThreshold   // fork: fingertip band on touch (see above)
+            : std::max(pointSnapThreshold * 0.7f,
+                       std::min(kWeldRadiusPx * m_mmPerPixel, kWeldRadiusCapMm));
     const float extThresh    = pointSnapThreshold * 0.6f;
     // POSITIONAL cap on directional / charged inferences: fires-checks are
     // ANGULAR for those, so capture distance grows with segment length (3°
