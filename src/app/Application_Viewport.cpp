@@ -6731,9 +6731,20 @@ void Application::renderViewport() {
                 auto pickSketchAt = [&](glm::vec2 pos, int& outPointId, int& outLineId,
                                         int& outCurveId) {
                     outPointId = -1; outLineId = -1; outCurveId = -1;
-                    const float pointTol = 0.3f; // matches SketchTool::findCoincidentPoint
-                    for (const auto& pt : m_activeSketch->getPoints()) {
-                        if (glm::length(pos - pt.pos) < pointTol) { outPointId = pt.id; return; }
+                    // Fork: on touch the grab radius is a finger (~32 dp on
+                    // screen), not 0.3 mm - that made grabbing a spline point
+                    // pixel-hunting. Nearest point within the radius wins.
+                    float pointTol = 0.3f; // matches SketchTool::findCoincidentPoint
+                    if (materializr::touchMode() && m_sketchTool->pixelScale() > 0.0f)
+                        pointTol = std::max(pointTol,
+                                            32.0f * uiScale() * m_sketchTool->pixelScale());
+                    {
+                        float bestPt = pointTol;
+                        for (const auto& pt : m_activeSketch->getPoints()) {
+                            const float d = glm::length(pos - pt.pos);
+                            if (d < bestPt) { bestPt = d; outPointId = pt.id; }
+                        }
+                        if (outPointId >= 0) return;
                     }
                     float bestD = 0.0f;
                     const float lineTol = std::max(m_sketchTool->getGridStep() * 0.5f, 0.5f);
@@ -7434,6 +7445,17 @@ void Application::renderViewport() {
                     ImGui::PopStyleColor(2);
                     if (del) deleteSelectedSketchElements();
                     if (dhov) ImGui::SetTooltip("%s", materializr::tr("Delete the selected sketch elements (undoable)"));
+                    // Fork: insert a control point into a spline next to the
+                    // selected one (on the curve, then drag it).
+                    if (m_sketchTool->canInsertSplinePoint()) {
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.48f, 0.85f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.58f, 0.95f, 1.0f));
+                        const bool add = wideButton("Add point");
+                        ImGui::PopStyleColor(2);
+                        if (add)
+                            recordSketchMutation([&]{ m_sketchTool->insertSplinePointAfterSelected(); });
+                    }
                 }
             }
             if (placing && classicLayout()) {

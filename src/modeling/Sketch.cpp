@@ -489,6 +489,16 @@ bool Sketch::appendSplineControlPoint(int splineId, int pointId) {
     return false;
 }
 
+bool Sketch::insertSplineControlPoint(int splineId, int index, int pointId) {
+    for (auto& sp : m_splines)
+        if (sp.id == splineId) {
+            if (index < 0 || index > static_cast<int>(sp.controlPointIds.size())) return false;
+            sp.controlPointIds.insert(sp.controlPointIds.begin() + index, pointId);
+            return true;
+        }
+    return false;
+}
+
 bool Sketch::popSplineControlPoint(int splineId) {
     for (auto& sp : m_splines)
         if (sp.id == splineId) {

@@ -2359,6 +2359,15 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     // Points and line segments are usually the user's intended target; the
     // curve perimeters back them up when the click doesn't land on either.
     int nearPt = findCoincidentPoint(pos, -1);
+    // Fork, touch: picking is a finger, not the 6 px weld radius - grab the
+    // nearest point within ~32 dp (welding while drawing keeps its own radius).
+    if (nearPt < 0 && touchMode() && m_mmPerPixel > 0.0f) {
+        float best = 32.0f * uiScale() * m_mmPerPixel;
+        for (const auto& pt : m_sketch->getPoints()) {
+            const float d = glm::length(pos - pt.pos);
+            if (d < best) { best = d; nearPt = pt.id; }
+        }
+    }
 
     int nearLine = -1;
     int nearCircle = -1;
@@ -2928,6 +2937,50 @@ void SketchTool::handleArcTool(glm::vec2 pos) {
         m_isPlacing = false;
         m_clickCount = 0;
     }
+}
+
+bool SketchTool::canInsertSplinePoint() const {
+    if (!m_sketch || m_selectedPoints.size() != 1) return false;
+    const int pid = *m_selectedPoints.begin();
+    for (const auto& sp : m_sketch->getSplines())
+        for (int cid : sp.controlPointIds)
+            if (cid == pid) return true;
+    return false;
+}
+
+int SketchTool::insertSplinePointAfterSelected() {
+    if (!canInsertSplinePoint()) return -1;
+    const int pid = *m_selectedPoints.begin();
+    for (const auto& sp : m_sketch->getSplines()) {
+        const auto& ids = sp.controlPointIds;
+        const bool closed = ids.size() > 2 && ids.front() == ids.back();
+        const int n = static_cast<int>(ids.size()) - (closed ? 1 : 0);   // unique points
+        int k = -1;
+        for (int i = 0; i < n; ++i) if (ids[i] == pid) { k = i; break; }
+        if (k < 0) continue;
+        // Span to split: k -> k+1, or k-1 -> k at the open end.
+        int a = k;
+        if (!closed && k == n - 1) a = k - 1;
+        if (a < 0) return -1;
+        std::vector<int> cidx, cids;
+        const std::vector<glm::vec2> samp = m_sketch->sampleSpline2D(sp, 24, &cidx, &cids);
+        if (a + 1 >= static_cast<int>(cidx.size())) return -1;
+        const int s0 = cidx[a], s1 = cidx[a + 1];
+        if (s1 <= s0 || s1 >= static_cast<int>(samp.size())) return -1;
+        const glm::vec2 pos = samp[(s0 + s1) / 2];          // on the current curve
+        const int splineId = sp.id;
+        const int newId = m_sketch->addPoint(pos);
+        if (!m_sketch->insertSplineControlPoint(splineId, a + 1, newId)) return -1;
+        if (splineId == m_activeSplineId) {
+            // Keep the in-progress list in step with the element.
+            auto it = std::find(m_splinePoints.begin(), m_splinePoints.end(), ids[a]);
+            if (it != m_splinePoints.end()) m_splinePoints.insert(it + 1, newId);
+        }
+        m_selectedPoints.clear();
+        m_selectedPoints.insert(newId);
+        return newId;
+    }
+    return -1;
 }
 
 void SketchTool::handleSplineTool(glm::vec2 pos) {

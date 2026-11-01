@@ -107,6 +107,8 @@ public:
     // undo shrinks it one point at a time instead of orphaning dots).
     bool appendSplineControlPoint(int splineId, int pointId);
     bool popSplineControlPoint(int splineId);   // false if <2 would remain
+    // Fork: insert `pointId` into the spline's control list at `index`.
+    bool insertSplineControlPoint(int splineId, int index, int pointId);
     int addPolygon(int centerPtId, double radius, int sides, double rotationRad = 0.0);
 
     // Element access
