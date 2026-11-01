@@ -2771,7 +2771,8 @@ void Application::renderViewport() {
                 // without a canvas tap. Hit-test + drag stay in the input scope.
                 // Skipped while a gizmo drag is in flight (the input scope then
                 // owns the visual, anchored at the drag-start centroid).
-                if (m_sketchTool->getMode() == SketchToolMode::Select &&
+                if (!materializr::touchMode() &&   // fork: no gizmo on touch
+                    m_sketchTool->getMode() == SketchToolMode::Select &&
                     m_sketchTool->hasElementSelection() &&
                     m_sketchGizmoHandle == SketchGizmoHandle::None) {
                     std::set<int> inv(m_sketchTool->getSelectedPoints().begin(),
@@ -6337,7 +6338,10 @@ void Application::renderViewport() {
                     return true;
                 };
                 bool gizmoOwnsInput = (m_sketchGizmoHandle != SketchGizmoHandle::None);
-                if (m_sketchTool->getMode() == SketchToolMode::Select &&
+                // Fork: no move/rotate gizmo on touch - selected points are
+                // dragged directly with the finger.
+                if (!materializr::touchMode() &&
+                    m_sketchTool->getMode() == SketchToolMode::Select &&
                     m_sketchTool->hasElementSelection()) {
 
                     // Resolve involved point ids (selected points + endpoints of
