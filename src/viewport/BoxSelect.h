@@ -18,6 +18,9 @@ public:
     bool isActive() const;
     glm::vec2 getMin() const;
     glm::vec2 getMax() const;
+    // Fork, Fusion-style: dragged right-to-left = crossing selection (green),
+    // left-to-right = window selection (blue).
+    bool isCrossing() const { return m_current.x < m_start.x; }
 
     // Render the selection rectangle
     void render(float viewportWidth, float viewportHeight);

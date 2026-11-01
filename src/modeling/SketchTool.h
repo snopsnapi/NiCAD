@@ -91,6 +91,10 @@ public:
 
     // --- Sketch-element selection (Select mode) ---
     const std::set<int>& getSelectedPoints()  const { return m_selectedPoints; }
+    // Fork: start dragging the current point selection from `pointId` (touch:
+    // only already-selected points move, Fusion-style). onMouseMove drives it,
+    // onMouseUp ends it - same machinery as the Select tool's drag.
+    void beginPointDrag(int pointId) { m_dragPointId = pointId; m_isDragging = true; }
     const std::set<int>& getSelectedLines()   const { return m_selectedLines; }
     const std::set<int>& getSelectedCircles() const { return m_selectedCircles; }
     const std::set<int>& getSelectedArcs()    const { return m_selectedArcs; }

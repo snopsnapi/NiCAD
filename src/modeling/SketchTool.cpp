@@ -2448,17 +2448,24 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     }
 
     if (nearPt >= 0) {
+        // Fork, touch: a tap SELECTS; only an already-selected point drags
+        // (Fusion-style select-then-move - no accidental nudges).
+        const bool wasSelected = reclickedSelected && m_selectedPoints.count(nearPt);
         m_selectedPoints.insert(nearPt);
-        m_dragPointId = nearPt;
-        m_isDragging = true; // multi-point drag handled in onMouseMove
+        if (!touchMode() || wasSelected) {
+            m_dragPointId = nearPt;
+            m_isDragging = true; // multi-point drag handled in onMouseMove
+        }
     } else if (nearLine >= 0) {
         if (m_lastDownAddedToSel) {
             // Ctrl+click on a line: toggle.
             if (m_selectedLines.count(nearLine)) m_selectedLines.erase(nearLine);
             else m_selectedLines.insert(nearLine);
         } else {
+            const bool wasSelected = reclickedSelected && m_selectedLines.count(nearLine);
             m_selectedLines.insert(nearLine);
-            m_isDragging = true; // dragging the line translates the whole selection
+            if (!touchMode() || wasSelected)
+                m_isDragging = true; // dragging the line translates the whole selection
         }
     } else if (nearCircle >= 0) {
         if (m_lastDownAddedToSel) {
@@ -2974,6 +2981,24 @@ void SketchTool::handleSplineTool(glm::vec2 pos) {
             m_activeSplineId = -1;
             m_isPlacing = false;
             m_clickCount = 0;
+            return;
+        }
+    }
+
+    // Fork, touch: a tap on an existing spline control point (not the close /
+    // finish taps handled above) selects it for moving instead of threading
+    // the spline through it a second time. Other points (a line end) still
+    // start / continue the spline, so curves can be joined to geometry.
+    if (ptId >= 0 && touchMode()) {
+        bool isSplineCtrl = false;
+        for (const auto& sp : m_sketch->getSplines()) {
+            for (int cid : sp.controlPointIds)
+                if (cid == ptId) { isSplineCtrl = true; break; }
+            if (isSplineCtrl) break;
+        }
+        if (isSplineCtrl) {
+            if (!m_lastDownAddedToSel) m_selectedPoints.clear();
+            m_selectedPoints.insert(ptId);
             return;
         }
     }

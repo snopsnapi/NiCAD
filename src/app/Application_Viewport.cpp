@@ -6899,6 +6899,22 @@ void Application::renderViewport() {
                             if (const char* why = m_sketchTool->consumeDimRejection())
                                 showToast(materializr::tr(why), 2.5);
                         }
+                    } else if (materializr::touchMode() &&
+                               m_sketchTool->getMode() == SketchToolMode::Spline &&
+                               [&] {
+                                   int hp = -1, hl = -1, hc = -1;
+                                   pickSketchAt(sketchCoord, hp, hl, hc);
+                                   if (hp < 0 || !m_sketchTool->getSelectedPoints().count(hp))
+                                       return false;
+                                   // Fork: a press on a SELECTED point moves the
+                                   // selection (one undo step, committed on release
+                                   // like a Select drag) instead of placing a point.
+                                   m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
+                                   m_sketchTool->beginPointDrag(hp);
+                                   m_sketchPressActive = false;
+                                   return true;
+                               }()) {
+                        // handled in the condition above
                     } else if (materializr::touchMode()) {
                         // A held circle awaiting its ✗/✓ bubble: drawing the
                         // next shape auto-commits it as-released (the bubble
@@ -6976,6 +6992,10 @@ void Application::renderViewport() {
                     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                         glm::vec2 mn = m_boxSelect->getMin();
                         glm::vec2 mx = m_boxSelect->getMax();
+                        // Fork, Fusion-style: right-to-left = crossing (anything
+                        // touched), left-to-right = window (points inside + only
+                        // elements lying wholly inside).
+                        const bool crossing = m_boxSelect->isCrossing();
                         m_boxSelect->end();
                         m_sketchBoxSelectActive = false;
 
@@ -7021,8 +7041,11 @@ void Application::renderViewport() {
                                 if (a == ptScreen.end() || b == ptScreen.end()) continue;
                                 glm::vec2 lmin = glm::min(a->second, b->second);
                                 glm::vec2 lmax = glm::max(a->second, b->second);
-                                if (lmax.x >= mn.x && lmin.x <= mx.x &&
-                                    lmax.y >= mn.y && lmin.y <= mx.y) {
+                                const bool touches = lmax.x >= mn.x && lmin.x <= mx.x &&
+                                                     lmax.y >= mn.y && lmin.y <= mx.y;
+                                const bool inside  = lmin.x >= mn.x && lmax.x <= mx.x &&
+                                                     lmin.y >= mn.y && lmax.y <= mx.y;
+                                if (crossing ? touches : inside) {
                                     selLns.insert(l.id);
                                 }
                             }
@@ -7043,6 +7066,20 @@ void Application::renderViewport() {
                                 }
                                 return false;
                             };
+                            auto allSamplesInRect = [&](const std::vector<glm::vec2>& s2d) {
+                                if (s2d.empty()) return false;
+                                for (glm::vec2 q : s2d) {
+                                    glm::vec2 sp;
+                                    if (!projectPt(q, sp) ||
+                                        sp.x < mn.x || sp.x > mx.x ||
+                                        sp.y < mn.y || sp.y > mx.y)
+                                        return false;
+                                }
+                                return true;
+                            };
+                            auto curveHit = [&](const std::vector<glm::vec2>& s2d) {
+                                return crossing ? anySampleInRect(s2d) : allSamplesInRect(s2d);
+                            };
                             for (const auto& c : m_activeSketch->getCircles()) {
                                 const SketchPoint* ctr = m_activeSketch->getPoint(c.centerPointId);
                                 if (!ctr) continue;
@@ -7052,7 +7089,7 @@ void Application::renderViewport() {
                                     ring.push_back(ctr->pos + glm::vec2(std::cos(t), std::sin(t)) *
                                                             static_cast<float>(c.radius));
                                 }
-                                if (anySampleInRect(ring)) selCircs.insert(c.id);
+                                if (curveHit(ring)) selCircs.insert(c.id);
                             }
                             for (const auto& a : m_activeSketch->getArcs()) {
                                 const SketchPoint* ctr = m_activeSketch->getPoint(a.centerPointId);
@@ -7068,10 +7105,10 @@ void Application::renderViewport() {
                                     samp.push_back(ctr->pos + glm::vec2(std::cos(t), std::sin(t)) *
                                                             static_cast<float>(a.radius));
                                 }
-                                if (anySampleInRect(samp)) selArcs.insert(a.id);
+                                if (curveHit(samp)) selArcs.insert(a.id);
                             }
                             for (const auto& sp : m_activeSketch->getSplines())
-                                if (anySampleInRect(m_activeSketch->sampleSpline2D(sp, 12)))
+                                if (curveHit(m_activeSketch->sampleSpline2D(sp, 12)))
                                     selSpls.insert(sp.id);
                             m_sketchTool->setSelectionFull(selPts, selLns, selCircs, selArcs, selSpls);
                         }
