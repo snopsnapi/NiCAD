@@ -1935,8 +1935,9 @@ void Application::loadAppSettings() {
         std::ifstream f(base + "tutorial_seen");
         return !f.good();
     }();
-    if (!m_supporter && !m_safeMode && !firstRun)
-        m_welcomeScreen->setVisible(true);
+    // Fork: no donation prompt on launch (the About dialog still links the
+    // upstream project and its support page).
+    (void)firstRun;
 
     // Landing page vs. session restore. "Open last project on launch" now means
     // RESTORE MY TABS: with it on, every project that was open when you quit
