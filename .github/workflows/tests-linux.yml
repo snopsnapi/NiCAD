@@ -1,9 +1,8 @@
 name: Geometry Tests (nikaishi)
 
+# Fork: Android is the only target - geometry tests run on demand
+# (gh workflow run tests-linux.yml --ref nikaishi), not on every push.
 on:
-  push:
-    branches: [nikaishi]
-    paths-ignore: ['**.md', 'tasks/**', 'docs/**', 'android/**']
   workflow_dispatch:
 
 concurrency:
