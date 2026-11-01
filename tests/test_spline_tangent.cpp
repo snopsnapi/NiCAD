@@ -134,7 +134,7 @@ TEST(SplineTangent, EndSnapsOntoLineLeavingHorizontally) {
     EXPECT_TRUE(c->isSatisfied);
 
     const std::vector<glm::vec2> samp =
-        sk.sampleSpline2D(sk.getSplines().front(), 64);
+        sk.sampleSpline2D(sk.getSplines().front(), 200);
     ASSERT_GE(samp.size(), 2);
     const glm::dvec2 tangent =
         glm::normalize(glm::dvec2(samp.back().x - samp[samp.size() - 2].x,
