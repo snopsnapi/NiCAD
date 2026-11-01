@@ -22,6 +22,7 @@
 
 #include "app/Application.h"
 #include "app/Window.h"
+#include "app/TouchArrow.h"
 #include "viewport/Viewport.h"
 #include "viewport/Grid.h"
 #include "viewport/ShapeRenderer.h"
@@ -1464,6 +1465,75 @@ void Application::renderViewport() {
                 }
             };
 
+            // Touch ops (Extrude, Push/Pull) draw a FAT arrow instead of
+            // drawDim. The arrow segment comes from toucharrow::arrowScreen -
+            // the SAME function the controller's hit-test uses - so the
+            // visible arrow is exactly the click target. Sizes come from the
+            // toucharrow dp constants x uiScale() (a 3 px line is ~0.2 mm on
+            // a 440 dpi tablet, same reasoning as Offset Face's overlay).
+            auto toScreenGlm = [&](const glm::vec3& w, glm::vec2& out) -> bool {
+                ImVec2 s;
+                if (!toImg(w, s)) return false;
+                out = glm::vec2(s.x, s.y);
+                return true;
+            };
+            auto drawTouchArrow = [&](glm::vec2 a, glm::vec2 b, bool grabbed) {
+                glm::vec2 d = b - a;
+                const float len = glm::length(d);
+                if (len < 4.0f) return;
+                d /= len;
+                const glm::vec2 perp(-d.y, d.x);
+                const float s3 = uiScale();
+                const float thick = (grabbed ? toucharrow::kLineGrabbedDp
+                                             : toucharrow::kLineDp) * s3;
+                const float ah    = (grabbed ? toucharrow::kHeadGrabbedDp
+                                             : toucharrow::kHeadDp) * s3;
+                const ImU32 col     = IM_COL32(255, 200,  60, 255);
+                const ImU32 outline = IM_COL32( 20,  20,  28, 230);
+                dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), outline, thick + 2.0f);
+                dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), col, thick);
+                const glm::vec2 base = b - d * ah;
+                const glm::vec2 w1 = base + perp * (ah * 0.5f);
+                const glm::vec2 w2 = base - perp * (ah * 0.5f);
+                // Slightly oversized halo behind the head.
+                const glm::vec2 hb  = base - d * 1.6f;
+                const glm::vec2 hw1 = hb + perp * (ah * 0.5f + 1.6f);
+                const glm::vec2 hw2 = hb - perp * (ah * 0.5f + 1.6f);
+                const glm::vec2 ht  = b + d * 1.6f;
+                dl->AddTriangleFilled(ImVec2(ht.x, ht.y), ImVec2(hw1.x, hw1.y),
+                                      ImVec2(hw2.x, hw2.y), outline);
+                dl->AddTriangleFilled(ImVec2(b.x, b.y), ImVec2(w1.x, w1.y),
+                                      ImVec2(w2.x, w2.y), col);
+            };
+            // Arrow + value plate beside the tip (drawDim's centred label
+            // would sit on the shaft of a fat arrow).
+            auto drawTouchDim = [&](const glm::vec3& originW,
+                                    const glm::vec3& dirW, float dist,
+                                    const char* label, bool grabbed) {
+                glm::vec2 sa, sb;
+                if (!toucharrow::arrowScreen(toScreenGlm, originW, dirW, dist,
+                                             sa, sb))
+                    return;
+                drawTouchArrow(sa, sb, grabbed);
+                if (!label || !label[0]) return;
+                glm::vec2 d = sb - sa;
+                if (glm::length(d) < 1e-3f) return;
+                d = glm::normalize(d);
+                const glm::vec2 perp(-d.y, d.x);
+                const float s3 = uiScale();
+                const ImU32 col = IM_COL32(255, 200, 60, 255);
+                ImVec2 ts = ImGui::CalcTextSize(label);
+                const glm::vec2 lp = sb + perp * (16.0f * s3);
+                ImVec2 tp(lp.x - ts.x * 0.5f, lp.y - ts.y * 0.5f);
+                dl->AddRectFilled(ImVec2(tp.x - 5, tp.y - 3),
+                                  ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
+                                  IM_COL32(20, 20, 28, 235), 3.0f);
+                dl->AddRect(ImVec2(tp.x - 5, tp.y - 3),
+                            ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
+                            col, 3.0f, 0, 1.5f);
+                dl->AddText(tp, col, label);
+            };
+
             // Revolve indicator - yellow arced arrow showing the rotation
             // axis + current angle while the Revolve popup is up. Now
             // CLICKABLE: press on the arc to grab it, drag tangentially to
@@ -1795,9 +1865,17 @@ void Application::renderViewport() {
             }
             if (m_extrudeCtl.active()) {
                 std::snprintf(dbuf, sizeof(dbuf), "%s", materializr::fmtLength(std::abs(m_extrudeCtl.distance())).c_str());
-                drawDim(m_extrudeCtl.origin(),
-                        m_extrudeCtl.origin() + m_extrudeCtl.normal() * m_extrudeCtl.distance(), dbuf,
-                        DimStyle::Bold);
+                if (materializr::touchMode()) {
+                    // Touch: fat arrow (hit-tested by the controller) instead
+                    // of the drawDim dimension line.
+                    drawTouchDim(m_extrudeCtl.origin(), m_extrudeCtl.normal(),
+                                 m_extrudeCtl.distance(), dbuf,
+                                 m_extrudeCtl.draggingHandle());
+                } else {
+                    drawDim(m_extrudeCtl.origin(),
+                            m_extrudeCtl.origin() + m_extrudeCtl.normal() * m_extrudeCtl.distance(), dbuf,
+                            DimStyle::Bold);
+                }
             } else if (m_ppCtl.active() && m_ppCtl.hasArrow()) {
                 // Arrow out of the face + signed-distance measurement.
                 // Push/pull STARTS at 0 mm (no change), and drawDim draws
@@ -1808,47 +1886,109 @@ void Application::renderViewport() {
                 // face centre along ±normal, in the Bold palette.
                 if (std::abs(m_ppCtl.distance()) > 0.05f) {
                     std::snprintf(dbuf, sizeof(dbuf), "%s", materializr::fmtLength(m_ppCtl.distance()).c_str());
-                    drawDim(m_ppCtl.origin(),
-                            m_ppCtl.origin() + m_ppCtl.normal() * m_ppCtl.distance(), dbuf,
-                            DimStyle::Bold);
+                    if (materializr::touchMode()) {
+                        drawTouchDim(m_ppCtl.origin(), m_ppCtl.normal(),
+                                     m_ppCtl.distance(), dbuf,
+                                     m_ppCtl.draggingHandle());
+                    } else {
+                        drawDim(m_ppCtl.origin(),
+                                m_ppCtl.origin() + m_ppCtl.normal() * m_ppCtl.distance(), dbuf,
+                                DimStyle::Bold);
+                    }
                 } else {
-                    ImVec2 so, sn;
-                    if (toImg(m_ppCtl.origin(), so) &&
-                        toImg(m_ppCtl.origin() + m_ppCtl.normal(), sn)) {
-                        ImVec2 d(sn.x - so.x, sn.y - so.y);
-                        const float L = std::sqrt(d.x * d.x + d.y * d.y);
-                        if (L > 1e-3f) { d.x /= L; d.y /= L; }
-                        else           { d = ImVec2(0.0f, -1.0f); }
-                        const float s3   = uiScale();
-                        const float half = 40.0f * s3;
-                        const float ah   = 12.0f * s3;
-                        const ImVec2 a(so.x - d.x * half, so.y - d.y * half);
-                        const ImVec2 b(so.x + d.x * half, so.y + d.y * half);
-                        const ImU32 col     = IM_COL32(255, 200,  60, 255);
-                        const ImU32 outline = IM_COL32( 20,  20,  28, 230);
-                        const ImVec2 perp(-d.y, d.x);
-                        dl->AddLine(a, b, outline, 5.0f);
-                        dl->AddLine(a, b, col, 3.0f);
-                        auto head = [&](ImVec2 tip, float sign) {
-                            ImVec2 back(tip.x - d.x * ah * sign,
-                                        tip.y - d.y * ah * sign);
-                            ImVec2 w1(back.x + perp.x * ah * 0.5f,
-                                      back.y + perp.y * ah * 0.5f);
-                            ImVec2 w2(back.x - perp.x * ah * 0.5f,
-                                      back.y - perp.y * ah * 0.5f);
-                            dl->AddTriangleFilled(tip, w1, w2, col);
-                            dl->AddTriangle(tip, w1, w2, outline, 1.2f);
-                        };
-                        head(b,  1.0f);
-                        head(a, -1.0f);
-                        const std::string hintS = materializr::fmtLength(0.0) + " - drag"; const char* hint = hintS.c_str();
-                        ImVec2 ts = ImGui::CalcTextSize(hint);
-                        ImVec2 tp(so.x + perp.x * 18.0f * s3 - ts.x * 0.5f,
-                                  so.y + perp.y * 18.0f * s3 - ts.y * 0.5f);
-                        dl->AddRectFilled(ImVec2(tp.x - 5, tp.y - 3),
-                                          ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
-                                          outline, 3.0f);
-                        dl->AddText(tp, col, hint);
+                    if (materializr::touchMode()) {
+                        // Fat starter double arrow - the same +/-40 dp
+                        // segment the controller hit-tests.
+                        ImVec2 so, sn;
+                        if (toImg(m_ppCtl.origin(), so) &&
+                            toImg(m_ppCtl.origin() + m_ppCtl.normal(), sn)) {
+                            ImVec2 d(sn.x - so.x, sn.y - so.y);
+                            const float L = std::sqrt(d.x * d.x + d.y * d.y);
+                            if (L > 1e-3f) { d.x /= L; d.y /= L; }
+                            else           { d = ImVec2(0.0f, -1.0f); }
+                            const float s3   = uiScale();
+                            const float half = toucharrow::kStarterHalfDp * s3;
+                            const float thick = toucharrow::kLineDp * s3;
+                            const float ah   = toucharrow::kHeadDp * s3;
+                            const ImVec2 a(so.x - d.x * half, so.y - d.y * half);
+                            const ImVec2 b(so.x + d.x * half, so.y + d.y * half);
+                            const ImU32 col     = IM_COL32(255, 200,  60, 255);
+                            const ImU32 outline = IM_COL32( 20,  20,  28, 230);
+                            const ImVec2 perp(-d.y, d.x);
+                            dl->AddLine(a, b, outline, thick + 2.0f);
+                            dl->AddLine(a, b, col, thick);
+                            auto head = [&](ImVec2 tip, float sign) {
+                                ImVec2 back(tip.x - d.x * ah * sign,
+                                            tip.y - d.y * ah * sign);
+                                ImVec2 w1(back.x + perp.x * ah * 0.5f,
+                                          back.y + perp.y * ah * 0.5f);
+                                ImVec2 w2(back.x - perp.x * ah * 0.5f,
+                                          back.y - perp.y * ah * 0.5f);
+                                // Slightly oversized halo behind the head.
+                                ImVec2 ht(tip.x + d.x * 1.6f * sign,
+                                          tip.y + d.y * 1.6f * sign);
+                                ImVec2 hb(tip.x - d.x * (ah + 1.6f) * sign,
+                                          tip.y - d.y * (ah + 1.6f) * sign);
+                                ImVec2 hw1(hb.x + perp.x * (ah * 0.5f + 1.6f),
+                                           hb.y + perp.y * (ah * 0.5f + 1.6f));
+                                ImVec2 hw2(hb.x - perp.x * (ah * 0.5f + 1.6f),
+                                           hb.y - perp.y * (ah * 0.5f + 1.6f));
+                                dl->AddTriangleFilled(ht, hw1, hw2, outline);
+                                dl->AddTriangleFilled(tip, w1, w2, col);
+                            };
+                            head(b,  1.0f);
+                            head(a, -1.0f);
+                            const std::string hintS = materializr::fmtLength(0.0) + " - drag"; const char* hint = hintS.c_str();
+                            ImVec2 ts = ImGui::CalcTextSize(hint);
+                            ImVec2 tp(so.x + perp.x * 18.0f * s3 - ts.x * 0.5f,
+                                      so.y + perp.y * 18.0f * s3 - ts.y * 0.5f);
+                            dl->AddRectFilled(ImVec2(tp.x - 5, tp.y - 3),
+                                              ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
+                                              outline, 3.0f);
+                            dl->AddRect(ImVec2(tp.x - 5, tp.y - 3),
+                                        ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
+                                        col, 3.0f, 0, 1.5f);
+                            dl->AddText(tp, col, hint);
+                        }
+                    } else {
+                        ImVec2 so, sn;
+                        if (toImg(m_ppCtl.origin(), so) &&
+                            toImg(m_ppCtl.origin() + m_ppCtl.normal(), sn)) {
+                            ImVec2 d(sn.x - so.x, sn.y - so.y);
+                            const float L = std::sqrt(d.x * d.x + d.y * d.y);
+                            if (L > 1e-3f) { d.x /= L; d.y /= L; }
+                            else           { d = ImVec2(0.0f, -1.0f); }
+                            const float s3   = uiScale();
+                            const float half = 40.0f * s3;
+                            const float ah   = 12.0f * s3;
+                            const ImVec2 a(so.x - d.x * half, so.y - d.y * half);
+                            const ImVec2 b(so.x + d.x * half, so.y + d.y * half);
+                            const ImU32 col     = IM_COL32(255, 200,  60, 255);
+                            const ImU32 outline = IM_COL32( 20,  20,  28, 230);
+                            const ImVec2 perp(-d.y, d.x);
+                            dl->AddLine(a, b, outline, 5.0f);
+                            dl->AddLine(a, b, col, 3.0f);
+                            auto head = [&](ImVec2 tip, float sign) {
+                                ImVec2 back(tip.x - d.x * ah * sign,
+                                            tip.y - d.y * ah * sign);
+                                ImVec2 w1(back.x + perp.x * ah * 0.5f,
+                                          back.y + perp.y * ah * 0.5f);
+                                ImVec2 w2(back.x - perp.x * ah * 0.5f,
+                                          back.y - perp.y * ah * 0.5f);
+                                dl->AddTriangleFilled(tip, w1, w2, col);
+                                dl->AddTriangle(tip, w1, w2, outline, 1.2f);
+                            };
+                            head(b,  1.0f);
+                            head(a, -1.0f);
+                            const std::string hintS = materializr::fmtLength(0.0) + " - drag"; const char* hint = hintS.c_str();
+                            ImVec2 ts = ImGui::CalcTextSize(hint);
+                            ImVec2 tp(so.x + perp.x * 18.0f * s3 - ts.x * 0.5f,
+                                      so.y + perp.y * 18.0f * s3 - ts.y * 0.5f);
+                            dl->AddRectFilled(ImVec2(tp.x - 5, tp.y - 3),
+                                              ImVec2(tp.x + ts.x + 5, tp.y + ts.y + 3),
+                                              outline, 3.0f);
+                            dl->AddText(tp, col, hint);
+                        }
                     }
                 }
             } else if (m_gizmoDragging && !m_planeGizmoDrag.empty()) {

@@ -1,5 +1,6 @@
 #include "ui/LengthField.h"
 #include "PushPullController.h"
+#include "TouchArrow.h"
 #include "PushPullPreview.h"
 #include "GhostMesh.h"
 #include "../core/Document.h"
@@ -670,27 +671,67 @@ void PushPullController::applyDrag(const IopViewport& vp) {
 }
 
 // Drag the arrow: a one-finger drag in the viewport (touch - orbit is
-// suppressed while push/pull is active) or a mouse left-drag. No sub-region
-// to hit-test - the whole viewport is the drag surface - so, unlike the edge
-// ops' near-the-arrow test, claim the handle on EVERY press while the arrow
-// is showing. Without this, trackpad mode (orbit + pan both on Left) let the
-// camera claim the drag-threshold frame before vp.dragging ever turned true,
-// so a press-and-hold drag orbited instead of pushing/pulling (Steve: "it is
-// not letting me drag during a push/pull"). Release on button-up, same as
-// EdgeOpController. NOT gated on !vp.uiCaptured like the sticky toggle below:
-// this whole block only runs inside `if (viewportHovered)` (ImGui::IsItemHovered
-// on the viewport image), which is already false whenever a floating panel
-// occludes the cursor - io.WantCaptureMouse itself is true across the ENTIRE
-// viewport regardless of overlays (see ViewCube.cpp's note on the same
-// gotcha), so gating this claim on it made it dead code and the fix a no-op.
+// suppressed while push/pull is active) or a mouse left-drag. DESKTOP has no
+// sub-region to hit-test - the whole viewport is the drag surface - so,
+// unlike the edge ops' near-the-arrow test, the handle claims EVERY press
+// while the arrow is showing. Without this, trackpad mode (orbit + pan both
+// on Left) let the camera claim the drag-threshold frame before vp.dragging
+// ever turned true, so a press-and-hold drag orbited instead of
+// pushing/pulling (Steve: "it is not letting me drag during a push/pull").
+// TOUCH instead hit-tests the visible arrow and claims only a press on it,
+// so a swipe anywhere else orbits the model: the grown arrow once the
+// distance moved, the +/-40 dp starter double arrow while it is still ~0
+// (same segments the overlay draws). Release on button-up, same as
+// EdgeOpController. NOT gated on !vp.uiCaptured like the sticky toggle
+// below: this whole block only runs inside `if (viewportHovered)`
+// (ImGui::IsItemHovered on the viewport image), which is already false
+// whenever a floating panel occludes the cursor - io.WantCaptureMouse itself
+// is true across the ENTIRE viewport regardless of overlays (see
+// ViewCube.cpp's note on the same gotcha), so gating this claim on it made
+// it dead code and the fix a no-op.
 void PushPullController::onViewportInput(const IopViewport& vp,
                                          const IopContext& ctx) {
     if (!active() || !m_st.hasArrow) return;
 
-    if (vp.clicked) setDraggingHandle(true);
-    else if (draggingHandle() && !vp.down) setDraggingHandle(false);
+    if (vp.clicked) {
+        if (materializr::touchMode()) {
+            // Hit-test the visible arrow (same geometry the viewport
+            // draws): the grown arrow once the distance moved, the
+            // double-headed starter segment while it is still ~0.
+            glm::vec2 a, b;
+            bool haveSeg;
+            if (std::abs(m_st.distance) > 0.05f) {
+                haveSeg = toucharrow::arrowScreen(vp.toScreen, m_st.origin,
+                                                  m_st.normal, m_st.distance,
+                                                  a, b);
+            } else {
+                glm::vec2 so, sn;
+                haveSeg = vp.toScreen(m_st.origin, so) &&
+                          vp.toScreen(m_st.origin + m_st.normal, sn);
+                if (haveSeg) {
+                    glm::vec2 d = sn - so;
+                    if (glm::length(d) < 1e-4f) haveSeg = false;
+                    else {
+                        d = glm::normalize(d);
+                        const float half = toucharrow::kStarterHalfDp *
+                                           materializr::uiScale();
+                        a = so - d * half;
+                        b = so + d * half;
+                    }
+                }
+            }
+            const bool hit =
+                haveSeg &&
+                toucharrow::distToSegment(vp.mouse, a, b) <
+                    toucharrow::pickRadiusPx(ctx.panel.imTouch,
+                                             ctx.panel.uiScale);
+            setDraggingHandle(hit);
+        } else {
+            setDraggingHandle(true);   // desktop: unchanged
+        }
+    } else if (draggingHandle() && !vp.down) setDraggingHandle(false);
 
-    if (vp.dragging) {
+    if (vp.dragging && draggingHandle()) {
         applyDrag(vp);
         updatePushPull(ctx);
     }
