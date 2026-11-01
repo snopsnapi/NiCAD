@@ -430,10 +430,16 @@ double SketchSolver::computeError(const Constraint& c, const Sketch& sketch) con
             for (const auto& l : lines) {
                 if (l.id == c.entityB) { line = &l; break; }
             }
+            // Fork: a full circle is as valid a tangent partner as an arc.
+            int curveCenterId = arc ? arc->centerPointId : -1;
+            double curveRadius = arc ? arc->radius : 0.0;
+            if (!arc)
+                for (const auto& ci : sketch.getCircles())
+                    if (ci.id == c.entityA) { curveCenterId = ci.centerPointId; curveRadius = ci.radius; break; }
 
-            if (!arc || !line) return 0.0;
+            if (curveCenterId < 0 || !line) return 0.0;
 
-            const SketchPoint* arcCenter = sketch.getPoint(arc->centerPointId);
+            const SketchPoint* arcCenter = sketch.getPoint(curveCenterId);
             const SketchPoint* lineStart = sketch.getPoint(line->startPointId);
             const SketchPoint* lineEnd = sketch.getPoint(line->endPointId);
             if (!arcCenter || !lineStart || !lineEnd) return 0.0;
@@ -448,7 +454,7 @@ double SketchSolver::computeError(const Constraint& c, const Sketch& sketch) con
             glm::vec2 toCenter = arcCenter->pos - lineStart->pos;
             float dist = std::abs(toCenter.x * (-lineDir.y) + toCenter.y * lineDir.x);
 
-            return static_cast<double>(dist - static_cast<float>(arc->radius));
+            return static_cast<double>(dist - static_cast<float>(curveRadius));
         }
 
         case ConstraintType::G2: {
@@ -775,9 +781,17 @@ void SketchSolver::applyCorrection(const Constraint& c, Sketch& sketch, double e
                 if (l.id == c.entityB) { line = &l; break; }
             }
 
-            if (!arc || !line) return;
+            // Fork: circles too (centre + radius, no endpoints to keep on the rim).
+            const SketchCircle* circle = nullptr;
+            if (!arc)
+                for (const auto& ci : sketch.getCircles())
+                    if (ci.id == c.entityA) { circle = &ci; break; }
 
-            const SketchPoint* arcCenter = sketch.getPoint(arc->centerPointId);
+            if ((!arc && !circle) || !line) return;
+
+            const int centerId = arc ? arc->centerPointId : circle->centerPointId;
+            const double curveRadius = arc ? arc->radius : circle->radius;
+            const SketchPoint* arcCenter = sketch.getPoint(centerId);
             const SketchPoint* lineStart = sketch.getPoint(line->startPointId);
             const SketchPoint* lineEnd = sketch.getPoint(line->endPointId);
             if (!arcCenter || !lineStart || !lineEnd) return;
@@ -793,12 +807,38 @@ void SketchSolver::applyCorrection(const Constraint& c, Sketch& sketch, double e
             float signedDist = toCenter.x * normal.x + toCenter.y * normal.y;
 
             // We want |signedDist| == radius. Preserve the sign.
-            float targetDist = static_cast<float>(arc->radius);
+            float targetDist = static_cast<float>(curveRadius);
             if (signedDist < 0.0f) targetDist = -targetDist;
 
             float correction = targetDist - signedDist;
-            glm::vec2 newCenter = arcCenter->pos + normal * correction;
-            sketch.movePoint(arc->centerPointId, newCenter);
+            if (arc) {
+                glm::vec2 newCenter = arcCenter->pos + normal * correction;
+                sketch.movePoint(centerId, newCenter);
+                break;
+            }
+            // Circle: whichever side is free moves. A Fixed centre leaves the
+            // whole correction to the line (and vice versa); both free -> half
+            // each, so neither jumps across the sketch.
+            auto isFixed = [&](int pid) {
+                for (const auto& f : sketch.getConstraints())
+                    if (f.type == ConstraintType::Fixed && f.isDriving && f.entityA == pid)
+                        return true;
+                return false;
+            };
+            const bool centerFixed = isFixed(centerId);
+            const bool lineFixed = isFixed(line->startPointId) || isFixed(line->endPointId);
+            float centerShare = 0.5f;
+            if (centerFixed && !lineFixed) centerShare = 0.0f;
+            else if (lineFixed && !centerFixed) centerShare = 1.0f;
+            if (centerShare > 0.0f)
+                sketch.movePoint(centerId, arcCenter->pos + normal * (correction * centerShare));
+            if (centerShare < 1.0f) {
+                const glm::vec2 shift = -normal * (correction * (1.0f - centerShare));
+                const int s0 = line->startPointId, s1 = line->endPointId;
+                const glm::vec2 p0 = lineStart->pos + shift, p1 = lineEnd->pos + shift;
+                sketch.movePoint(s0, p0);
+                sketch.movePoint(s1, p1);
+            }
             break;
         }
 

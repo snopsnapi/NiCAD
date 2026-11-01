@@ -6939,7 +6939,9 @@ void Application::constrainTapPick(int pointId, int lineId, int curveId) {
                 // entityA; first-tapped spline wins when both are splines).
                 if (aSp)      { ok = bLn || bCv || bSp; outA = ia; outB = ib; }
                 else if (bSp) { ok = aLn || aCv;         outA = ib; outB = ia; }
-                else          { ok = (aCv && bLn);       outA = ia; outB = ib; }
+                else if (aCv && bLn) { outA = ia; outB = ib; }
+                else if (aLn && bCv) { outA = ib; outB = ia; }   // line tapped first
+                else ok = false;
                 break;
             case CT::G2:
                 // Spline end curvature-continuous with another curve: the
