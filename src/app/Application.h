@@ -1100,6 +1100,9 @@ private:
 
     // Snap-to-grid for gizmo translate (shares the grid step with the sketch grid).
     bool m_snapToGrid = false;   // fork: grid snap removed (always off)
+    // Fork: history step of the last sketch point-drag commit; Back undoes that
+    // move first instead of popping the in-progress spline's last point.
+    int m_lastSketchDragStep = -1;
     // Previous-frame hover state for the corner snap widget. The widget is
     // hit-tested with raw IsMouseHoveringRect (no ImGui item) so it can't
     // claim input via the usual IsItemActive path; instead the viewport

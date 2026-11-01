@@ -282,7 +282,9 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
             if (p && delta != glm::vec2(0.0f)) {
                 m_snapExcludePoints = pts;
                 glm::vec2 target = p->pos + delta;
-                glm::vec2 inferred = snap(target);
+                // Fork, touch: a dragged point follows the finger - no
+                // axis / on-line magnets (they fought the finger on the tablet).
+                glm::vec2 inferred = touchMode() ? target : snap(target);
                 m_snapExcludePoints.clear();
                 // A point already stuck to a rim rides it; snap()'s answer only
                 // applies once the attachment has been let go.

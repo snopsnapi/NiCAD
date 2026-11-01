@@ -3231,7 +3231,13 @@ void Application::handleShortcuts() {
         if (m_inSketchMode && m_sketchTool &&
             m_sketchTool->getMode() == SketchToolMode::Spline &&
             !m_sketchTool->splinePointsInProgress().empty()) {
-            recordSketchMutation([&] { m_sketchTool->removeLastSplinePoint(); });
+            if (m_lastSketchDragStep >= 0 &&
+                m_history->currentStep() == m_lastSketchDragStep) {
+                undoWithCascade();            // the point move was the last action
+                m_lastSketchDragStep = -1;
+            } else {
+                recordSketchMutation([&] { m_sketchTool->removeLastSplinePoint(); });
+            }
         } else if (touchCanUndo()) {
             touchUndo();
         }

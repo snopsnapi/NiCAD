@@ -7263,6 +7263,7 @@ void Application::renderViewport() {
                             auto op = std::make_unique<SketchEditOp>(
                                 m_activeSketch, m_sketchDragBefore, after_ptr);
                             m_history->pushExecuted(std::move(op), *m_document);
+                            m_lastSketchDragStep = m_history->currentStep();
                             // Cascade the move to any body built from this sketch.
                             // Dimensional edits (circle Ø / constraints) publish
                             // this so the body follows; a drag-move pushed the
