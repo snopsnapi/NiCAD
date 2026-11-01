@@ -6737,7 +6737,7 @@ void Application::renderViewport() {
                     float pointTol = 0.3f; // matches SketchTool::findCoincidentPoint
                     if (materializr::touchMode() && m_sketchTool->pixelScale() > 0.0f)
                         pointTol = std::max(pointTol,
-                                            32.0f * uiScale() * m_sketchTool->pixelScale());
+                                            24.0f * uiScale() * m_sketchTool->pixelScale());
                     {
                         float bestPt = pointTol;
                         for (const auto& pt : m_activeSketch->getPoints()) {
@@ -6749,7 +6749,7 @@ void Application::renderViewport() {
                     float bestD = 0.0f;
                     float lineTol = std::max(m_sketchTool->getGridStep() * 0.5f, 0.5f);
                     if (materializr::touchMode() && m_sketchTool->pixelScale() > 0.0f)
-                        lineTol = std::max(lineTol, 28.0f * uiScale() * m_sketchTool->pixelScale());
+                        lineTol = std::max(lineTol, 18.0f * uiScale() * m_sketchTool->pixelScale());
                     for (const auto& l : m_activeSketch->getLines()) {
                         const SketchPoint* a = m_activeSketch->getPoint(l.startPointId);
                         const SketchPoint* b = m_activeSketch->getPoint(l.endPointId);

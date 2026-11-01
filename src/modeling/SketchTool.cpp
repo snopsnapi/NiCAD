@@ -2375,7 +2375,7 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     // Fork, touch: picking is a finger, not the 6 px weld radius - grab the
     // nearest point within ~32 dp (welding while drawing keeps its own radius).
     if (nearPt < 0 && touchMode() && m_mmPerPixel > 0.0f) {
-        float best = 32.0f * uiScale() * m_mmPerPixel;
+        float best = 24.0f * uiScale() * m_mmPerPixel;
         for (const auto& pt : m_sketch->getPoints()) {
             const float d = glm::length(pos - pt.pos);
             if (d < best) { best = d; nearPt = pt.id; }
@@ -2389,7 +2389,7 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     float tol = std::max(tolStep() * 0.5f, 0.5f) * snapScale(); // sketch units (wider on touch)
     // Fork, touch: a finger, not a cursor - ~28 dp catch width for elements.
     if (touchMode() && m_mmPerPixel > 0.0f)
-        tol = std::max(tol, 28.0f * uiScale() * m_mmPerPixel);
+        tol = std::max(tol, 18.0f * uiScale() * m_mmPerPixel);
     if (nearPt < 0) {
         // Line segments.
         float bestD = 0.0f;

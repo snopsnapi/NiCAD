@@ -565,10 +565,12 @@ Application::SketchRegionHit Application::pickSketchRegion(float screenX, float 
             // chain as a polyline. Good enough for picking; the renderer
             // tessellates the same control sequence anyway.
             for (const auto& sp : sketch.getSplines()) {
-                const auto& ids = sp.controlPointIds;
-                for (size_t i = 1; i < ids.size(); ++i) {
-                    if (distPointToSegment(p2d, getPoint2D(ids[i-1]),
-                                                getPoint2D(ids[i])) <= tol) {
+                // Fork: test the CURVE, not the control polygon - an
+                // interpolating spline bulges off its point chain, so a tap on
+                // the drawn curve missed.
+                const std::vector<glm::vec2> samp = sketch.sampleSpline2D(sp, 12);
+                for (size_t i = 1; i < samp.size(); ++i) {
+                    if (distPointToSegment(p2d, samp[i-1], samp[i]) <= tol) {
                         nearEdge = true; break;
                     }
                 }
