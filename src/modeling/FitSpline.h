@@ -13,6 +13,15 @@ struct Constraint {
     std::optional<glm::dvec3> d2;        // optional 2nd derivative
 };
 
+// Two constraint sets are equal when they pin the same rows - used by the
+// exact-interpolant cache key in Sketch.cpp (TZ-22 end conditions).
+inline bool operator==(const Constraint& a, const Constraint& b) {
+    return a.index == b.index && a.d1 == b.d1 && a.d2 == b.d2;
+}
+inline bool operator!=(const Constraint& a, const Constraint& b) {
+    return !(a == b);
+}
+
 struct Curve {
     int degree = 0;
     std::vector<double> knots;           // FULL knot vector (with repeats), length = poles + degree + 1
