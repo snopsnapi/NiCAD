@@ -114,6 +114,65 @@ void Sketch::setPointOnCurve(int pointId, int curveId) {
     if (SketchPoint* pt = findPoint(pointId)) pt->onCurveId = curveId;
 }
 
+bool Sketch::mergePoints(int fromId, int intoId) {
+    if (fromId == intoId) return false;
+    if (!findPoint(fromId) || !findPoint(intoId)) return false;
+
+    for (auto& l : m_lines) {
+        if (l.startPointId == fromId) l.startPointId = intoId;
+        if (l.endPointId == fromId) l.endPointId = intoId;
+    }
+    for (auto& c : m_circles)
+        if (c.centerPointId == fromId) c.centerPointId = intoId;
+    for (auto& a : m_arcs) {
+        if (a.centerPointId == fromId) a.centerPointId = intoId;
+        if (a.startPointId == fromId) a.startPointId = intoId;
+        if (a.endPointId == fromId) a.endPointId = intoId;
+    }
+    for (auto& sp : m_splines)
+        for (int& pid : sp.controlPointIds)
+            if (pid == fromId) pid = intoId;
+    for (auto& g : m_polygons) {
+        if (g.centerPointId == fromId) g.centerPointId = intoId;
+        for (int& pid : g.vertexPointIds)
+            if (pid == fromId) pid = intoId;
+    }
+    for (auto& k : m_constraints) {
+        if (k.entityA == fromId) k.entityA = intoId;
+        if (k.entityB == fromId) k.entityB = intoId;
+    }
+
+    // The merged-away point goes; everything that referenced it now names
+    // intoId instead.
+    m_points.erase(
+        std::remove_if(m_points.begin(), m_points.end(),
+            [fromId](const SketchPoint& p) { return p.id == fromId; }),
+        m_points.end());
+
+    // A line whose endpoints collapsed into a single point has no span left.
+    m_lines.erase(
+        std::remove_if(m_lines.begin(), m_lines.end(),
+            [](const SketchLine& l) { return l.startPointId == l.endPointId; }),
+        m_lines.end());
+
+    // Splines: collapse runs of the same id the merge created, then drop any
+    // spline left with fewer than two distinct control points. A spline whose
+    // first and last id are now the same IS a closed spline - kept as such.
+    for (auto it = m_splines.begin(); it != m_splines.end();) {
+        std::vector<int> collapsed;
+        collapsed.reserve(it->controlPointIds.size());
+        for (int pid : it->controlPointIds)
+            if (collapsed.empty() || collapsed.back() != pid)
+                collapsed.push_back(pid);
+        it->controlPointIds = std::move(collapsed);
+        const std::unordered_set<int> uniq(it->controlPointIds.begin(),
+                                           it->controlPointIds.end());
+        if (uniq.size() < 2) it = m_splines.erase(it);
+        else ++it;
+    }
+    return true;
+}
+
 void Sketch::movePoint(int id, glm::vec2 pos) {
     SketchPoint* pt = findPoint(id);
     if (pt) {

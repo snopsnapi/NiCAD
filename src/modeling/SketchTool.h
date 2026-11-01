@@ -692,6 +692,10 @@ private:
 
     // Select/drag state
     int m_dragPointId = -1;
+    // Fork, touch: sketch point the dragged point is currently magnet-snapped
+    // to (a drag-time Endpoint catch; -1 when free). Set in onMouseMove,
+    // consumed by onMouseUp to weld the two points via Sketch::mergePoints.
+    int m_dragSnapTargetId = -1;
     bool m_isDragging = false;
     bool m_lastDownAddedToSel = false; // Ctrl state for the current click
     std::set<int> m_selectedPoints;

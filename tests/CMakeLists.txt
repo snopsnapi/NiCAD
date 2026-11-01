@@ -750,6 +750,12 @@ add_executable(test_offset_face test_offset_face.cpp)
 target_link_libraries(test_offset_face PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_offset_face COMMAND test_offset_face)
 
+# test_sketch_merge - Sketch::mergePoints: welding a dragged point onto another
+# (touch snap-join) - spline closes end-onto-start, degenerate line/spline prune
+add_executable(test_sketch_merge test_sketch_merge.cpp)
+target_link_libraries(test_sketch_merge PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_sketch_merge COMMAND test_sketch_merge)
+
 # test_fit_spline - the FitSpline port of rt_spline.interpolate(): golden-data
 # match, de Boor evaluation through points/derivatives, OCCT round-trip,
 # periodic closed curve. Data: tests/data/spline_golden.json (regenerate with
