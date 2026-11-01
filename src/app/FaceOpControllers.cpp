@@ -1,6 +1,7 @@
 #include "ui/LengthField.h"
 #include "ui/StepperRow.h"
 #include "FaceOpControllers.h"
+#include "TouchArrow.h"
 #include "../ui/UiTheme.h"      // viewportBanner
 #include "../ui/NumField.h"     // inputNumber, btnConfirm/btnCancel
 #include "../ui/OpDialogGrip.h"
@@ -413,29 +414,6 @@ void DefeatureController::onCleanup() { m_faces.clear(); }
 
 // ─── Offset Face ─────────────────────────────────────────────────────────────
 
-// Screen-space arrow for Offset Face: base at the face, tip `distance` along
-// the normal, but never shorter than kMinArrowDp on screen - a 5 mm arrow on a
-// big part is a few pixels, impossible to grab with a finger.
-namespace {
-constexpr float kMinArrowDp = 70.0f;
-template <class ToScreen>
-bool offsetArrowScreen(const ToScreen& toScreen, const glm::vec3& origin,
-                       const glm::vec3& normal, float distance,
-                       glm::vec2& a, glm::vec2& b) {
-    if (!toScreen(origin, a)) return false;
-    glm::vec2 unit;
-    if (!toScreen(origin + normal, unit)) return false;
-    glm::vec2 dir = unit - a;
-    const float dl = glm::length(dir);
-    if (dl < 1e-4f) return false;            // normal points at the camera
-    dir /= dl;
-    float len = dl * std::max(std::abs(distance), 1.0f);
-    len = std::max(len, kMinArrowDp * materializr::uiScale());
-    b = a + dir * len;
-    return true;
-}
-} // namespace
-
 int OffsetFaceController::onBegin(const IopContext& ctx) {
     // Gather every selected face on ONE body - multi-select a few faces to
     // offset them together (same rule as Defeature).
@@ -503,26 +481,16 @@ void OffsetFaceController::onViewportInput(const IopViewport& vp,
     if (!active() || !m_hasHandle) return;
 
     if (vp.clicked) {
-        auto distToSeg = [&](glm::vec2 a, glm::vec2 b) {
-            glm::vec2 d = b - a;
-            float len2 = glm::dot(d, d);
-            glm::vec2 q;
-            if (len2 < 1e-6f) q = vp.mouse - a;
-            else {
-                float t = glm::clamp(glm::dot(vp.mouse - a, d) / len2, 0.0f, 1.0f);
-                q = vp.mouse - (a + t * d);
-            }
-            return glm::length(q);
-        };
         glm::vec2 cs, st;
         // Hit radius in PHYSICAL pixels: ImGui runs at device resolution
         // here (fonts are 15 * uiScale). Wider than EdgeOp's 20/30 - an
         // offset arrow is the whole gesture on touch, so it gets a fatter
         // grab zone (48 dp) than a mouse does.
-        const float pick = (ctx.panel.imTouch ? 48.0f : 20.0f) *
-                           ctx.panel.uiScale;
-        if (offsetArrowScreen(vp.toScreen, m_origin, m_normal, m_distance, cs, st) &&
-            distToSeg(cs, st) < pick)
+        const float pick = toucharrow::pickRadiusPx(ctx.panel.imTouch,
+                                                    ctx.panel.uiScale);
+        if (toucharrow::arrowScreen(vp.toScreen, m_origin, m_normal,
+                                    m_distance, cs, st) &&
+            toucharrow::distToSegment(vp.mouse, cs, st) < pick)
             m_dragging = true;
         setDraggingHandle(m_dragging);
     }
@@ -569,8 +537,10 @@ void OffsetFaceController::drawOverlay(const IopOverlay& ov) const {
         if (len < 4.0f) return;
         d /= len;
         glm::vec2 perp(-d.y, d.x);
-        const float thick = (grabbed ? 7.0f : 5.0f) * sc;
-        const float ah    = (grabbed ? 26.0f : 22.0f) * sc;
+        const float thick = (grabbed ? toucharrow::kLineGrabbedDp
+                                     : toucharrow::kLineDp) * sc;
+        const float ah    = (grabbed ? toucharrow::kHeadGrabbedDp
+                                     : toucharrow::kHeadDp) * sc;
         ov.line(a, b, kOutline, thick + 2.0f);
         ov.line(a, b, col, thick);
         glm::vec2 base = b - d * ah;
@@ -585,7 +555,7 @@ void OffsetFaceController::drawOverlay(const IopOverlay& ov) const {
     };
 
     glm::vec2 sa, sb;
-    if (offsetArrowScreen(ov.toScreen, m_origin, m_normal, m_distance, sa, sb))
+    if (toucharrow::arrowScreen(ov.toScreen, m_origin, m_normal, m_distance, sa, sb))
         arrow(sa, sb, kAmber, m_dragging);
 
     // The readout follows the CURSOR, not the tip (same as EdgeOp).
