@@ -1099,7 +1099,7 @@ private:
     glm::vec3 m_sketchSnappedAnchor{0.0f};
 
     // Snap-to-grid for gizmo translate (shares the grid step with the sketch grid).
-    bool m_snapToGrid = true;
+    bool m_snapToGrid = false;   // fork: grid snap removed (always off)
     // Previous-frame hover state for the corner snap widget. The widget is
     // hit-tested with raw IsMouseHoveringRect (no ImGui item) so it can't
     // claim input via the usual IsItemActive path; instead the viewport

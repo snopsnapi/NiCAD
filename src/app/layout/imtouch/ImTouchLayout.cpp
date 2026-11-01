@@ -254,9 +254,9 @@ void Application::renderImTouchLayout() {
             ImGui::SameLine(0.0f, 8.0f * s);
         }
         // Snap-to-grid - the corner square's im-touch home (renderSnapWidget
-        // skips itself in this layout). Label shows the current step; accent
-        // fill while snap is on; tap opens the shared settings popup.
-        {
+        // skips itself in this layout). Fork: grid snap removed, so the
+        // button is gone too.
+        if (false) {
             char snapLbl[16];
             // Display unit, like the presets that set it and like the desktop
             // badge. Raw mm here read "10" after picking the "1" preset under cm.

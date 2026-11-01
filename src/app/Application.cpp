@@ -2250,7 +2250,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_aiSettings = s.ai;
     m_includePrereleases = s.includePrereleases;
     m_supporter = s.supporter;
-    m_snapToGrid = s.snapToGrid;
+    (void)s.snapToGrid; m_snapToGrid = false;   // fork: grid snap removed
     // Display number -> millimetres. Safe here because the display unit is
     // applied above (applyDisplayUnitChange) before this runs.
     m_sketchGridStep = static_cast<float>(materializr::toMm(s.sketchGridStep));
@@ -8587,7 +8587,7 @@ void Application::run() {
                 m_showTools) {
                 action = m_toolbar->render();
                 m_sketchGridStep = m_toolbar->getGridStep();
-                m_snapToGrid = m_toolbar->getSnapToGrid();
+                (void)m_toolbar->getSnapToGrid(); m_snapToGrid = false;   // fork: grid snap removed
                 // The toolbar owns neither the step nor the toggle any more -
                 // renderViewport pushes both, for every layout. It still READS
                 // the toolbar's widgets above, which is what makes a classic

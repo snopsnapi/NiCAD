@@ -3525,7 +3525,7 @@ void Application::renderSnapWidget() {
         ImGui::EndTooltip();
     }
     if (clicked) ImGui::OpenPopup("SnapSettings");
-    if (rightClicked) {
+    if (rightClicked && false) {   // fork: grid snap removed
         m_snapToGrid = !m_snapToGrid;
         if (m_toolbar) m_toolbar->setSnapToGrid(m_snapToGrid);
         saveAppSettings();
@@ -3574,7 +3574,7 @@ void Application::renderSnapSettingsPopup() {
         ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Snap & Grid"));
         ImGui::Separator();
         bool snap = m_snapToGrid;
-        if (ImGui::Checkbox(materializr::tr("Snap to grid"), &snap)) {
+        if (false && ImGui::Checkbox(materializr::tr("Snap to grid"), &snap)) {   // fork: grid snap removed
             m_snapToGrid = snap;
             if (m_toolbar) m_toolbar->setSnapToGrid(m_snapToGrid);
             saveAppSettings();
