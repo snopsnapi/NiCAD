@@ -90,7 +90,7 @@ void Application::renderImTouchLayout() {
 
     const float s = uiScale();
     auto tip = [&](const char* text) {   // same policy as the modern layout
-        if (!m_showToolbarTooltips || !text) return;
+        if (!m_showToolbarTooltips || !text || touchMode()) return;
         if (ImGui::BeginItemTooltip()) {
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
             ImGui::TextUnformatted(text);
