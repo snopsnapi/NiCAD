@@ -8,9 +8,6 @@
 #include "gl_common.h"
 #include "url_open.h"
 #include "../platform_defs.h"
-#if !defined(MZ_MOBILE)
-#include "../ai/AiConnectionTest.h"
-#endif
 
 #include <cstdlib>
 #include <filesystem>
@@ -650,109 +647,6 @@ void Application::renderSettings() {
                     ImGui::SetItemTooltip("%s", materializr::tr("Pre-fills the STL import dialog. Lower = coarser/faster with larger merged flat faces; higher = more faithful but heavier."));
                     ImGui::EndTabItem();
                 }
-
-#if !defined(MZ_MOBILE)
-                if (ImGui::BeginTabItem(materializr::tr("AI Assistant###AI Assistant"))) {
-                    static char anthropicKeyBuf[256] = {};
-                    static char anthropicModelBuf[128] = {};
-                    static char openAiKeyBuf[256] = {};
-                    static char openAiUrlBuf[256] = {};
-                    static char openAiModelBuf[128] = {};
-                    // buffersLoaded only ever populates once per process lifetime. If
-                    // m_aiSettings changes from outside this tab, the displayed fields go
-                    // stale; no other tab in this dialog has a "reload on dialog open"
-                    // pattern to follow, and Import no longer touches m_aiSettings (see
-                    // Application::importSettings), so this is an accepted limitation.
-                    static bool buffersLoaded = false;
-                    if (!buffersLoaded) {
-                        std::snprintf(anthropicKeyBuf, sizeof(anthropicKeyBuf), "%s",
-                                     m_aiSettings.anthropicApiKey.c_str());
-                        std::snprintf(anthropicModelBuf, sizeof(anthropicModelBuf), "%s",
-                                     m_aiSettings.anthropicModel.c_str());
-                        std::snprintf(openAiKeyBuf, sizeof(openAiKeyBuf), "%s",
-                                     m_aiSettings.openAiApiKey.c_str());
-                        std::snprintf(openAiUrlBuf, sizeof(openAiUrlBuf), "%s",
-                                     m_aiSettings.openAiBaseUrl.c_str());
-                        std::snprintf(openAiModelBuf, sizeof(openAiModelBuf), "%s",
-                                     m_aiSettings.openAiModel.c_str());
-                        buffersLoaded = true;
-                    }
-
-                    int providerIdx = m_aiSettings.provider == materializr::AiProvider::Anthropic ? 0 : 1;
-                    const char* providerNames[] = {"Anthropic", materializr::tr("OpenAI-compatible (OpenAI/Ollama/LM Studio)")};
-                    if (ImGui::Combo(materializr::tr("Provider"), &providerIdx, providerNames, 2)) {
-                        m_aiSettings.provider = providerIdx == 0 ? materializr::AiProvider::Anthropic
-                                                                  : materializr::AiProvider::OpenAiCompatible;
-                        changed = true;
-                    }
-
-                    if (m_aiSettings.provider == materializr::AiProvider::Anthropic) {
-                        if (ImGui::InputText(materializr::tr("API Key"), anthropicKeyBuf, sizeof(anthropicKeyBuf),
-                                             ImGuiInputTextFlags_Password)) {
-                            m_aiSettings.anthropicApiKey = anthropicKeyBuf;
-                            changed = true;
-                        }
-                        if (ImGui::InputText(materializr::tr("Model"), anthropicModelBuf, sizeof(anthropicModelBuf))) {
-                            m_aiSettings.anthropicModel = anthropicModelBuf;
-                            changed = true;
-                        }
-                    } else {
-                        if (ImGui::InputText(materializr::tr("API Key"), openAiKeyBuf, sizeof(openAiKeyBuf),
-                                             ImGuiInputTextFlags_Password)) {
-                            m_aiSettings.openAiApiKey = openAiKeyBuf;
-                            changed = true;
-                        }
-                        if (ImGui::InputText(materializr::tr("Base URL"), openAiUrlBuf, sizeof(openAiUrlBuf))) {
-                            m_aiSettings.openAiBaseUrl = openAiUrlBuf;
-                            changed = true;
-                        }
-                        if (ImGui::InputText(materializr::tr("Model"), openAiModelBuf, sizeof(openAiModelBuf))) {
-                            m_aiSettings.openAiModel = openAiModelBuf;
-                            changed = true;
-                        }
-                    }
-                    if (materializr::showPanelHints())
-                        ImGui::TextWrapped("%s", materializr::tr(
-                            "Point the base URL at http://localhost:11434/v1 for Ollama, or "
-                            "LM Studio's local server address, to run without any cloud key."));
-
-                    // Test Connection: fires one minimal, tool-free request against
-                    // the current in-memory settings (auto-persisted the same frame
-                    // they change, via saveAppSettings() below) so the user gets a
-                    // yes/no on their setup before ever opening the chat overlay - the
-                    // whole point of "quick and simple" per the spec.
-                    static std::future<materializr::ai::LlmTurnResult> testFuture;
-                    static std::string testResultText;
-                    static bool testResultIsError = false;
-                    const bool testBusy = testFuture.valid() &&
-                        testFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
-                    if (testFuture.valid() &&
-                        testFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        try {
-                            materializr::ai::LlmTurnResult r = testFuture.get();
-                            testResultIsError = !r.ok;
-                            testResultText = r.ok ? std::string(materializr::tr("Connection OK."))
-                                                   : materializr::trFormat("Failed: %s", r.error);
-                        } catch (const std::exception& e) {
-                            testResultIsError = true;
-                            testResultText = materializr::trFormat("Failed: %s", e.what());
-                        }
-                    }
-                    ImGui::BeginDisabled(testBusy);
-                    if (ImGui::Button(materializr::tr("Test Connection"))) {
-                        testResultText.clear();
-                        testFuture = materializr::ai::testConnection(m_aiSettings);
-                    }
-                    ImGui::EndDisabled();
-                    if (testBusy) { ImGui::SameLine(); ImGui::TextDisabled("%s", materializr::tr("Testing...")); }
-                    if (!testResultText.empty()) {
-                        ImGui::TextColored(testResultIsError ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
-                                                             : ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                                           "%s", testResultText.c_str());
-                    }
-                    ImGui::EndTabItem();
-                }
-#endif // !defined(MZ_MOBILE)
 
                 ImGui::EndTabBar();
             }

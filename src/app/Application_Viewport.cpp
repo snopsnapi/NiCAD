@@ -8057,9 +8057,11 @@ void Application::renderViewport() {
             ImGui::Separator();
             // Window width is fixed now, so wrapping at the window edge is safe
             // (no feedback loop).
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(materializr::tr(dimHint));
-            ImGui::PopTextWrapPos();
+            if (materializr::showPanelHints()) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(materializr::tr(dimHint));
+                ImGui::PopTextWrapPos();
+            }
 
             // Arc apex stage: choose what the number MEANS. Sticky across
             // placements, so a run of same-radius arcs is not a toggle each
