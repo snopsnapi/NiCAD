@@ -1,3 +1,5 @@
+#include "../touch_mode.h"
+#include "../ui_scale.h"
 #include "gl_common.h"
 
 #include <cstdio>
@@ -434,7 +436,9 @@ Application::SketchRegionHit Application::pickSketchRegion(float screenX, float 
         // boundary catch area is a consistent, comfortable width at any zoom.
         float tol = 0.0f;
         glm::vec3 o2, d2; float t2; glm::vec2 p2d2;
-        rayAt(screenX + 6.0f, screenY, o2, d2);
+        // Fork: on touch the catch width is a finger (~28 dp), not 6 px.
+        rayAt(screenX + (materializr::touchMode() ? 28.0f * materializr::uiScale() : 6.0f),
+              screenY, o2, d2);
         if (projectToPlane(o2, d2, t2, p2d2)) tol = glm::length(p2d2 - p2d);
 
         // Still building: say so when the point is over this sketch at all,

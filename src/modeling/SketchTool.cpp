@@ -263,6 +263,19 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
                 }
             }
         }
+        // Fork: selected curves move with the selection too.
+        for (int cid : m_selectedCircles)
+            for (const auto& c : m_sketch->getCircles())
+                if (c.id == cid) { pts.insert(c.centerPointId); break; }
+        for (int aid : m_selectedArcs)
+            for (const auto& a : m_sketch->getArcs())
+                if (a.id == aid) {
+                    pts.insert(a.centerPointId); pts.insert(a.startPointId); pts.insert(a.endPointId);
+                    break;
+                }
+        for (int sid : m_selectedSplines)
+            for (const auto& sp : m_sketch->getSplines())
+                if (sp.id == sid) { for (int cp : sp.controlPointIds) pts.insert(cp); break; }
         if (pts.empty() && m_dragPointId >= 0) pts.insert(m_dragPointId);
 
         // When a single point is being dragged, run inference snap on its
@@ -2373,7 +2386,10 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     int nearCircle = -1;
     int nearArc = -1;
     int nearSpline = -1;
-    const float tol = std::max(tolStep() * 0.5f, 0.5f) * snapScale(); // sketch units (wider on touch)
+    float tol = std::max(tolStep() * 0.5f, 0.5f) * snapScale(); // sketch units (wider on touch)
+    // Fork, touch: a finger, not a cursor - ~28 dp catch width for elements.
+    if (touchMode() && m_mmPerPixel > 0.0f)
+        tol = std::max(tol, 28.0f * uiScale() * m_mmPerPixel);
     if (nearPt < 0) {
         // Line segments.
         float bestD = 0.0f;
@@ -2483,21 +2499,27 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
             if (m_selectedCircles.count(nearCircle)) m_selectedCircles.erase(nearCircle);
             else m_selectedCircles.insert(nearCircle);
         } else {
+            const bool wasSelected = reclickedSelected && m_selectedCircles.count(nearCircle);
             m_selectedCircles.insert(nearCircle);
+            if (touchMode() && wasSelected) m_isDragging = true;   // fork: move selection
         }
     } else if (nearArc >= 0) {
         if (m_lastDownAddedToSel) {
             if (m_selectedArcs.count(nearArc)) m_selectedArcs.erase(nearArc);
             else m_selectedArcs.insert(nearArc);
         } else {
+            const bool wasSelected = reclickedSelected && m_selectedArcs.count(nearArc);
             m_selectedArcs.insert(nearArc);
+            if (touchMode() && wasSelected) m_isDragging = true;   // fork: move selection
         }
     } else if (nearSpline >= 0) {
         if (m_lastDownAddedToSel) {
             if (m_selectedSplines.count(nearSpline)) m_selectedSplines.erase(nearSpline);
             else m_selectedSplines.insert(nearSpline);
         } else {
+            const bool wasSelected = reclickedSelected && m_selectedSplines.count(nearSpline);
             m_selectedSplines.insert(nearSpline);
+            if (touchMode() && wasSelected) m_isDragging = true;   // fork: move selection
         }
     }
     // Empty space + no modifier: selection already cleared above.

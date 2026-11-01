@@ -6747,7 +6747,9 @@ void Application::renderViewport() {
                         if (outPointId >= 0) return;
                     }
                     float bestD = 0.0f;
-                    const float lineTol = std::max(m_sketchTool->getGridStep() * 0.5f, 0.5f);
+                    float lineTol = std::max(m_sketchTool->getGridStep() * 0.5f, 0.5f);
+                    if (materializr::touchMode() && m_sketchTool->pixelScale() > 0.0f)
+                        lineTol = std::max(lineTol, 28.0f * uiScale() * m_sketchTool->pixelScale());
                     for (const auto& l : m_activeSketch->getLines()) {
                         const SketchPoint* a = m_activeSketch->getPoint(l.startPointId);
                         const SketchPoint* b = m_activeSketch->getPoint(l.endPointId);
