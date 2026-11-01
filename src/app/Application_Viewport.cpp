@@ -8844,6 +8844,7 @@ void Application::renderStylusRadialMenu() {
         {"Tangent",       1, ConstraintType::Tangent},
         {"90°",    1, ConstraintType::Perpendicular},
         {"Dimension",     2, ConstraintType::Parallel},
+        {"Fix",           1, ConstraintType::Fixed},
     };
     const int n = static_cast<int>(sizeof(items) / sizeof(items[0]));
 
