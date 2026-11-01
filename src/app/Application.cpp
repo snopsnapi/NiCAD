@@ -2654,16 +2654,10 @@ void Application::handleToolAction(int action) {
         case ToolAction::SketchConstrainConcentric:
             applySketchConstraint(ConstraintType::Concentric); break;
         case ToolAction::SketchConstrainMenu:
-            // ТЗ-21: the touch rail's Constraints button toggles - a repeat
-            // tap while the Constrain mode is on leaves it (Fusion's reflex:
-            // tap the lit tool again to put it down).
-            if (m_inSketchMode && materializr::touchMode()) {
-                if (m_sketchTool &&
-                    m_sketchTool->getMode() == SketchToolMode::Constrain)
-                    m_sketchTool->setMode(SketchToolMode::Select);
-                else
-                    m_sketchConstraintsMenuPending = true;
-            }
+            // ТЗ-21: the touch rail's Constraints button always opens the menu
+            // (switch tool there; tapping the active item leaves the mode).
+            if (m_inSketchMode && materializr::touchMode())
+                m_sketchConstraintsMenuPending = true;
             break;
 
         // --- Sketch element transforms (operate on the Select-mode selection) ---
@@ -6808,9 +6802,31 @@ void Application::addSketchConstraintPair(ConstraintType t, int a, int b) {
 void Application::constrainTapPick(int pointId, int lineId, int curveId) {
     if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) return;
     if (m_sketchTool->getMode() != SketchToolMode::Constrain) return;
-    const int id = pointId >= 0 ? pointId
-                 : lineId  >= 0 ? lineId
-                 : curveId;
+    int id = pointId >= 0 ? pointId
+           : lineId  >= 0 ? lineId
+           : curveId;
+    // The pick prefers points, but only Fix takes a point: for the curve tools a
+    // tap on a control point means the curve it belongs to (spline points sit
+    // too densely to tap the curve between them). Parallel/Perpendicular want a
+    // line; Tangent/G2 prefer a spline, then an arc, then a line.
+    if (pointId >= 0 && m_constrainType != ConstraintType::Fixed) {
+        int ownSpline = -1, ownArc = -1, ownLine = -1;
+        for (const auto& sp : m_activeSketch->getSplines())
+            for (int pid : sp.controlPointIds)
+                if (pid == pointId && ownSpline < 0) ownSpline = sp.id;
+        for (const auto& a : m_activeSketch->getArcs())
+            if ((a.startPointId == pointId || a.endPointId == pointId) && ownArc < 0)
+                ownArc = a.id;
+        for (const auto& l : m_activeSketch->getLines())
+            if ((l.startPointId == pointId || l.endPointId == pointId) && ownLine < 0)
+                ownLine = l.id;
+        const bool lineTool = m_constrainType == ConstraintType::Parallel ||
+                              m_constrainType == ConstraintType::Perpendicular;
+        const int owner = lineTool ? ownLine
+                        : ownSpline >= 0 ? ownSpline
+                        : ownArc >= 0 ? ownArc : ownLine;
+        if (owner >= 0) id = owner;
+    }
     if (id < 0) return; // empty tap: keep the pending first pick, Fusion-style
 
     // Element ids are unique across types (one counter), so the kind is
