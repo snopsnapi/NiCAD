@@ -1,5 +1,6 @@
 #pragma once
 #include "SketchConstraints.h"
+#include "FitSpline.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <vector>
@@ -65,6 +66,21 @@ struct SketchSpline {
     int id;
     std::vector<int> controlPointIds;
     bool isConstruction = false;
+};
+
+// End-derivative condition for the interpolating spline (TZ-22): a Tangent or
+// G2 constraint snaps a spline END onto another curve. `active` - a contact
+// constraint binds this end. `dir` - unit tangent of the reference curve at
+// the contact, sign-aligned with the spline's own direction of travel at that
+// end (so the interpolant leaves the end along the contact, never back along
+// itself). For G2 (`g2`) `curvature` is the reference curve's curvature there
+// and `normal` the unit vector toward its centre of curvature.
+struct SplineEndCondition {
+    bool active = false;
+    glm::dvec2 dir{0.0};
+    double curvature = 0.0;
+    bool g2 = false;
+    glm::dvec2 normal{0.0};
 };
 
 struct SketchPolygon {
@@ -143,10 +159,28 @@ public:
                                           std::vector<int>* ctrlIds = nullptr) const;
     // Interpolate a smooth curve through raw 2D positions (no sketch points
     // needed) - used for the live in-progress spline preview. Falls back to
-    // the input polyline on failure.
+    // the input polyline on failure. `startCond`/`endCond` (default: inactive)
+    // pin the end tangents (Tangent) and, with g2, the end curvatures.
     static std::vector<glm::vec2> interpolate2D(
         const std::vector<glm::vec2>& ctrl, int segsPerSpan = 12,
-        bool closed = false, std::vector<int>* spanStartIdx = nullptr);
+        bool closed = false, std::vector<int>* spanStartIdx = nullptr,
+        const SplineEndCondition& startCond = SplineEndCondition(),
+        const SplineEndCondition& endCond = SplineEndCondition());
+
+    // --- Spline Tangent/G2 contacts (TZ-22) --------------------------------
+    // Fill `start`/`end` from the sketch's Tangent/G2 constraints on `sp`
+    // (entityA = spline id, entityB = the reference curve id). The bound end
+    // is whichever end is closer to the reference curve; a closed spline
+    // binds nothing. The reference curve's own shape is always sampled
+    // WITHOUT its contact conditions (no recursion spline<->spline).
+    void splineEndConditions(const SketchSpline& sp, SplineEndCondition& start,
+                             SplineEndCondition& end) const;
+    // Post-solver pass for Tangent/G2 constraints with a spline in entityA:
+    // projects the bound end point onto the reference curve and moves it
+    // there (unless the point is Fixed or an endpoint of the reference curve
+    // itself - then it is only measured), and refreshes isSatisfied
+    // (distance to the curve < 1e-4 mm). Closed splines stay unsatisfied.
+    void enforceSplineContacts();
 
     // The point of `plane` NEAREST `near` whose sketch coordinates are both
     // multiples of `step` - i.e. a point of the snap lattice.
@@ -443,6 +477,14 @@ public:
     int  getNextConstraintId() const { return m_nextConstraintId; }
 
 private:
+    // fitspline end-derivative rows for the wire path (buildWires and the
+    // region dividing tools): the Tangent/G2 contact conditions of `sp`,
+    // rotated into the plane's world directions and chord-normalised against
+    // `pts3`, so the exact extruded edge is the conditioned curve the 2D
+    // sample path draws. Empty when no contact binds the spline.
+    std::vector<fitspline::Constraint> worldSplineEndConditions(
+        const SketchSpline& sp, const std::vector<glm::dvec3>& pts3) const;
+
     // Move a point that may be an arc endpoint, then recompute each affected
     // arc's centre+radius so the arc keeps its original swept angle with the
     // (unmoved) opposite endpoint. Used by the size-edit mutators above so

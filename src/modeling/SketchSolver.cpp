@@ -59,8 +59,18 @@ bool SketchSolver::solve(Sketch& sketch, int maxIterations, double tolerance) {
             case ConstraintType::Fixed:
                 numEquations += 2; // x and y fixed
                 break;
-            case ConstraintType::Tangent:
-                numEquations += 1;
+            case ConstraintType::Tangent: {
+                // The spline variant (entityA = spline id, TZ-22) is enforced
+                // by the Sketch::enforceSplineContacts post-pass, not here:
+                // it costs no relaxation equation. Arc/line tangents keep +1.
+                bool splineA = false;
+                for (const auto& sp : sketch.getSplines())
+                    if (sp.id == c.entityA) { splineA = true; break; }
+                if (!splineA) numEquations += 1;
+                break;
+            }
+            case ConstraintType::G2:
+                // Spline end curvature contact (TZ-22): post-pass only.
                 break;
             case ConstraintType::Equal:
                 numEquations += 1;
@@ -221,11 +231,15 @@ bool SketchSolver::solve(Sketch& sketch, int maxIterations, double tolerance) {
                 c.isSatisfied = true;
             }
             refreshReferenceValues();
+            // Spline Tangent/G2 contacts: project bound ends onto their
+            // curves and refresh each contact's isSatisfied (TZ-22).
+            sketch.enforceSplineContacts();
             return true;
         }
     }
 
     refreshReferenceValues();
+    sketch.enforceSplineContacts();
     return false;
 }
 
@@ -401,7 +415,9 @@ double SketchSolver::computeError(const Constraint& c, const Sketch& sketch) con
         case ConstraintType::Tangent: {
             // Tangent between arc (entityA) and line (entityB)
             // The arc's endpoint should lie on the line, and the line direction
-            // should be perpendicular to the radius at that point
+            // should be perpendicular to the radius at that point. A spline in
+            // entityA (TZ-22) matches no arc here and returns 0.0: the
+            // enforceSplineContacts post-pass owns that contact.
             const auto& arcs = sketch.getArcs();
             const auto& lines = sketch.getLines();
 
@@ -433,6 +449,13 @@ double SketchSolver::computeError(const Constraint& c, const Sketch& sketch) con
             float dist = std::abs(toCenter.x * (-lineDir.y) + toCenter.y * lineDir.x);
 
             return static_cast<double>(dist - static_cast<float>(arc->radius));
+        }
+
+        case ConstraintType::G2: {
+            // Spline end curvature contact (TZ-22). Enforced by the
+            // enforceSplineContacts post-pass after this loop, like the
+            // spline variant of Tangent above: zero equations here.
+            return 0.0;
         }
 
         case ConstraintType::Equal: {
@@ -778,6 +801,11 @@ void SketchSolver::applyCorrection(const Constraint& c, Sketch& sketch, double e
             sketch.movePoint(arc->centerPointId, newCenter);
             break;
         }
+
+        case ConstraintType::G2:
+            // Spline end curvature contact (TZ-22): the post-pass owns it;
+            // there is nothing a point correction could move here.
+            break;
 
         case ConstraintType::Equal: {
             // Circle/arc pair → equalise radii to their average (radii live in

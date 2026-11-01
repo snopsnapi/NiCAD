@@ -756,6 +756,13 @@ add_executable(test_sketch_merge test_sketch_merge.cpp)
 target_link_libraries(test_sketch_merge PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_sketch_merge COMMAND test_sketch_merge)
 
+# test_spline_tangent - TZ-22: spline Tangent/G2 contacts. The bound spline end
+# lands on the reference curve (circle/line) and the interpolant leaves it with
+# the curve's tangent (and curvature for G2).
+add_executable(test_spline_tangent test_spline_tangent.cpp)
+target_link_libraries(test_spline_tangent PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_spline_tangent COMMAND test_spline_tangent)
+
 # test_fit_spline - the FitSpline port of rt_spline.interpolate(): golden-data
 # match, de Boor evaluation through points/derivatives, OCCT round-trip,
 # periodic closed curve. Data: tests/data/spline_golden.json (regenerate with

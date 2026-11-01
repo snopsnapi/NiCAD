@@ -684,9 +684,16 @@ namespace {
 // `params` with the curve parameter at every span boundary (pts.size() open,
 // pts.size()+1 closed with the last entry the wrap of the first). Null handle
 // on failure (coincident points, singular system).
+//
+// `conds` (open curves only): fitspline end-derivative rows (Tangent/G2
+// contacts, TZ-22). When present the build ALWAYS goes through
+// fitspline::interpolate + fitspline::toOcct - GeomAPI_Interpolate takes its
+// own boundary conditions and cannot honour them; for > 40 points the dense
+// Gauss solve is slower than OCCT's banded one but conditions still win.
 Handle(Geom_BSplineCurve) exactSplineInterpolantUncached(const std::vector<glm::dvec3>& pts,
                                                  bool closed,
-                                                 std::vector<double>& params) {
+                                                 std::vector<double>& params,
+                                                 const std::vector<fitspline::Constraint>* conds) {
     params.clear();
     const int n = static_cast<int>(pts.size());
     if (n < 2) return nullptr;
@@ -727,51 +734,67 @@ Handle(Geom_BSplineCurve) exactSplineInterpolantUncached(const std::vector<glm::
         // fitspline's dense Gauss is O(n^3): fine for hand-placed splines, far too
         // slow for traced outlines with hundreds of points. Same chord-length
         // cubic C2 interpolant via OCCT's banded solver there.
-        if (n > 40) {
-            Handle(TColgp_HArray1OfPnt) arr = new TColgp_HArray1OfPnt(1, n);
-            Handle(TColStd_HArray1OfReal) prm = new TColStd_HArray1OfReal(1, n);
-            for (int i = 0; i < n; ++i) {
-                arr->SetValue(i + 1, gp_Pnt(pts[static_cast<size_t>(i)].x,
-                                            pts[static_cast<size_t>(i)].y,
-                                            pts[static_cast<size_t>(i)].z));
-                prm->SetValue(i + 1, params[static_cast<size_t>(i)]);
-            }
-            GeomAPI_Interpolate ip(arr, prm, Standard_False, 1e-7);
-            ip.Perform();
-            return ip.IsDone() ? ip.Curve() : nullptr;
+        const bool constrained = conds && !conds->empty();
+        if (constrained || n <= 40) {
+            const std::vector<fitspline::Constraint> empty;
+            fitspline::Curve c;
+            if (!fitspline::interpolate(pts, constrained ? *conds : empty, 3, c))
+                return nullptr;
+            Handle(Geom_BSplineCurve) curve = fitspline::toOcct(c);
+            if (!curve.IsNull()) params = c.params;
+            return curve;
         }
-        fitspline::Curve c;
-        if (!fitspline::interpolate(pts, {}, 3, c)) return nullptr;
-        Handle(Geom_BSplineCurve) curve = fitspline::toOcct(c);
-        if (!curve.IsNull()) params = c.params;
-        return curve;
+        Handle(TColgp_HArray1OfPnt) arr = new TColgp_HArray1OfPnt(1, n);
+        Handle(TColStd_HArray1OfReal) prm = new TColStd_HArray1OfReal(1, n);
+        for (int i = 0; i < n; ++i) {
+            arr->SetValue(i + 1, gp_Pnt(pts[static_cast<size_t>(i)].x,
+                                        pts[static_cast<size_t>(i)].y,
+                                        pts[static_cast<size_t>(i)].z));
+            prm->SetValue(i + 1, params[static_cast<size_t>(i)]);
+        }
+        GeomAPI_Interpolate ip(arr, prm, Standard_False, 1e-7);
+        ip.Perform();
+        return ip.IsDone() ? ip.Curve() : nullptr;
     } catch (...) {
         return nullptr;
     }
 }
 
 // interpolate2D runs every frame (renderer, snapping, trim), so the curve is
-// memoised per thread on the exact input points. A small FIFO is enough: the
-// working set is the splines currently on screen.
+// memoised per thread on the exact input points AND the end conditions (the
+// same control points with a Tangent/G2 contact must not reuse the free
+// interpolant). A small FIFO is enough: the working set is the splines
+// currently on screen.
 Handle(Geom_BSplineCurve) exactSplineInterpolant(const std::vector<glm::dvec3>& pts,
                                                  bool closed,
-                                                 std::vector<double>& params) {
+                                                 std::vector<double>& params,
+                                                 const std::vector<fitspline::Constraint>* conds) {
     struct Entry {
         std::vector<glm::dvec3> pts;
         bool closed = false;
+        std::vector<fitspline::Constraint> conds;
         Handle(Geom_BSplineCurve) curve;
         std::vector<double> params;
     };
     thread_local std::vector<Entry> cache;
     for (const Entry& e : cache) {
-        if (e.closed == closed && e.pts == pts) {
+        if (e.closed == closed && e.pts == pts &&
+            ((!conds && e.conds.empty()) ||
+             (conds && e.conds.size() == conds->size() &&
+              std::equal(conds->begin(), conds->end(), e.conds.begin())))) {
             params = e.params;
             return e.curve;   // read-only use by callers; sharing the handle is safe per thread
         }
     }
-    Handle(Geom_BSplineCurve) c = exactSplineInterpolantUncached(pts, closed, params);
+    Handle(Geom_BSplineCurve) c = exactSplineInterpolantUncached(pts, closed, params, conds);
     if (cache.size() >= 64) cache.erase(cache.begin());
-    cache.push_back({pts, closed, c, params});
+    Entry e;
+    e.pts = pts;
+    e.closed = closed;
+    if (conds) e.conds = *conds;
+    e.curve = c;
+    e.params = params;
+    cache.push_back(std::move(e));
     return c;
 }
 
@@ -779,7 +802,9 @@ Handle(Geom_BSplineCurve) exactSplineInterpolant(const std::vector<glm::dvec3>& 
 
 std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
                                              int segsPerSpan, bool closed,
-                                             std::vector<int>* spanStartIdx) {
+                                             std::vector<int>* spanStartIdx,
+                                             const SplineEndCondition& startCond,
+                                             const SplineEndCondition& endCond) {
     int n = static_cast<int>(ctrl.size());
     if (spanStartIdx) spanStartIdx->clear();
     if (n < 2) return ctrl;
@@ -814,9 +839,44 @@ std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
     std::vector<glm::dvec3> pts3;
     pts3.reserve(static_cast<size_t>(n));
     for (const glm::vec2& p : ctrl) pts3.emplace_back(p.x, p.y, 0.0);
+    // Tangent/G2 end contacts (TZ-22). fitspline normalises its parameter to
+    // [0,1] by chord length, so a world-space d1 = dir * L and, for G2,
+    // d2 = curvature * L^2 * normal, with L the sum of the chord lengths.
+    std::vector<fitspline::Constraint> conds;
+    const bool hasStart = startCond.active && !closed;
+    const bool hasEnd = endCond.active && !closed;
+    if (hasStart || hasEnd) {
+        double chord = 0.0;
+        for (int i = 1; i < n; ++i)
+            chord += glm::length(pts3[static_cast<size_t>(i)] -
+                                 pts3[static_cast<size_t>(i - 1)]);
+        if (chord > 1e-12) {
+            if (hasStart) {
+                fitspline::Constraint fc;
+                fc.index = 0;
+                fc.d1 = glm::dvec3(startCond.dir * chord, 0.0);
+                if (startCond.g2)
+                    fc.d2 = glm::dvec3(startCond.curvature * chord * chord *
+                                           startCond.normal,
+                                       0.0);
+                conds.push_back(fc);
+            }
+            if (hasEnd) {
+                fitspline::Constraint fc;
+                fc.index = n - 1;
+                fc.d1 = glm::dvec3(endCond.dir * chord, 0.0);
+                if (endCond.g2)
+                    fc.d2 = glm::dvec3(endCond.curvature * chord * chord *
+                                           endCond.normal,
+                                       0.0);
+                conds.push_back(fc);
+            }
+        }
+    }
     std::vector<double> params;
     Handle(Geom_BSplineCurve) curve =
-        exactSplineInterpolant(pts3, closed && n >= 3, params);
+        exactSplineInterpolant(pts3, closed && n >= 3, params,
+                               conds.empty() ? nullptr : &conds);
     // The curve is only usable when its parameters cover every span boundary
     // (a closed spline with fewer than 3 distinct points falls back to the
     // chords, same as a failed interpolation).
@@ -888,13 +948,335 @@ std::vector<glm::vec2> Sketch::sampleSpline2D(const SketchSpline& sp,
         usedIds.push_back(ids[k]);
     }
     if (ctrl.size() < 2) return {};
-    if (!ctrlSampleIdx && !ctrlIds) return interpolate2D(ctrl, segsPerSpan, closedSp);
-    std::vector<glm::vec2> out = interpolate2D(ctrl, segsPerSpan, closedSp, ctrlSampleIdx);
+    SplineEndCondition startCond, endCond;
+    splineEndConditions(sp, startCond, endCond);
+    if (!ctrlSampleIdx && !ctrlIds)
+        return interpolate2D(ctrl, segsPerSpan, closedSp, nullptr,
+                             startCond, endCond);
+    std::vector<glm::vec2> out = interpolate2D(ctrl, segsPerSpan, closedSp,
+                                               ctrlSampleIdx, startCond, endCond);
     if (ctrlIds) {
         *ctrlIds = usedIds;
         if (closedSp) ctrlIds->push_back(usedIds.front());
     }
     return out;
+}
+
+// --- Spline Tangent/G2 contacts (TZ-22) -------------------------------------
+
+namespace {
+
+// Where a curve (line/circle/arc/spline id) meets a probe point: the nearest
+// point on the curve, the unit tangent there and - for G2 - the curvature and
+// the unit vector toward the centre of curvature. Splines are sampled with
+// interpolate2D WITHOUT contact conditions: a spline pinned to another spline
+// reads the other's free shape, so spline<->spline contacts cannot recurse.
+struct CurveContact {
+    bool valid = false;
+    glm::dvec2 point{0.0};
+    glm::dvec2 tangent{0.0};
+    double curvature = 0.0;
+    glm::dvec2 normal{0.0};
+};
+
+// Menger curvature of three samples: exact for a circle, O(h^2) for a smooth
+// curve; the turn sign picks which side of the tangent the centre sits on.
+bool mengerCurvature(const glm::dvec2& a, const glm::dvec2& b,
+                     const glm::dvec2& c, double& kappa, glm::dvec2& toCenter) {
+    const glm::dvec2 ab = b - a, bc = c - b, ac = c - a;
+    const double lab = glm::length(ab), lbc = glm::length(bc),
+                 lac = glm::length(ac);
+    if (lab < 1e-12 || lbc < 1e-12 || lac < 1e-12) return false;
+    const double cross = ab.x * bc.y - ab.y * bc.x;
+    kappa = 2.0 * std::abs(cross) / (lab * lbc * lac);
+    const glm::dvec2 travel = ac / lac;
+    toCenter = (cross > 0.0) ? glm::dvec2(-travel.y, travel.x)
+                             : glm::dvec2(travel.y, -travel.x);
+    return true;
+}
+
+CurveContact curveContact(const Sketch& sk, int curveId, glm::vec2 probe) {
+    CurveContact out;
+    const glm::dvec2 p(probe.x, probe.y);
+    for (const auto& line : sk.getLines()) {
+        if (line.id != curveId) continue;
+        const SketchPoint* a = sk.getPoint(line.startPointId);
+        const SketchPoint* b = sk.getPoint(line.endPointId);
+        if (!a || !b) return out;
+        const glm::dvec2 dir = glm::dvec2(b->pos.x, b->pos.y) -
+                               glm::dvec2(a->pos.x, a->pos.y);
+        const double len = glm::length(dir);
+        if (len < 1e-12) return out;
+        out.tangent = dir / len;
+        out.point = glm::dvec2(a->pos.x, a->pos.y) +
+                    out.tangent * glm::dot(p - glm::dvec2(a->pos.x, a->pos.y),
+                                           out.tangent);
+        out.curvature = 0.0;
+        out.normal = glm::dvec2(0.0);
+        out.valid = true;
+        return out;
+    }
+    for (const auto& circle : sk.getCircles()) {
+        if (circle.id != curveId) continue;
+        const SketchPoint* c = sk.getPoint(circle.centerPointId);
+        if (!c || circle.radius <= 0.0) return out;
+        glm::dvec2 radial = p - glm::dvec2(c->pos.x, c->pos.y);
+        if (glm::length(radial) < 1e-12) radial = glm::dvec2(1.0, 0.0);
+        radial = glm::normalize(radial);
+        out.point = glm::dvec2(c->pos.x, c->pos.y) + radial * circle.radius;
+        out.tangent = glm::dvec2(-radial.y, radial.x);
+        out.curvature = 1.0 / circle.radius;
+        out.normal = -radial; // toward the centre
+        out.valid = true;
+        return out;
+    }
+    for (const auto& arc : sk.getArcs()) {
+        if (arc.id != curveId) continue;
+        const SketchPoint* c = sk.getPoint(arc.centerPointId);
+        if (!c || arc.radius <= 0.0) return out;
+        glm::dvec2 radial = p - glm::dvec2(c->pos.x, c->pos.y);
+        if (glm::length(radial) < 1e-12) radial = glm::dvec2(1.0, 0.0);
+        radial = glm::normalize(radial);
+        out.point = glm::dvec2(c->pos.x, c->pos.y) + radial * arc.radius;
+        out.tangent = glm::dvec2(-radial.y, radial.x);
+        out.curvature = 1.0 / arc.radius;
+        out.normal = -radial;
+        out.valid = true;
+        return out;
+    }
+    for (const auto& sp : sk.getSplines()) {
+        if (sp.id != curveId) continue;
+        const auto& ids = sp.controlPointIds;
+        const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+        std::vector<glm::vec2> ctrl;
+        const size_t nCtrl = ids.size() - (closedSp ? 1 : 0);
+        ctrl.reserve(nCtrl);
+        for (size_t k = 0; k < nCtrl; ++k) {
+            const SketchPoint* cp = sk.getPoint(ids[k]);
+            if (cp) ctrl.push_back(cp->pos);
+        }
+        // Free shape on purpose (see the struct comment).
+        const std::vector<glm::vec2> samp =
+            Sketch::interpolate2D(ctrl, 24, closedSp);
+        if (samp.size() < 2) return out;
+        // Dense projection: nearest sample, refined against its two
+        // neighbouring segments.
+        size_t best = 0;
+        double bestD = std::numeric_limits<double>::max();
+        for (size_t i = 0; i < samp.size(); ++i) {
+            const double d = glm::length(glm::dvec2(samp[i].x, samp[i].y) - p);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        size_t seg = best;
+        glm::dvec2 q(samp[best].x, samp[best].y);
+        bestD = glm::length(q - p);
+        for (size_t s = (best > 0 ? best - 1 : 0);
+             s + 1 < samp.size() && s <= best + 1; ++s) {
+            const glm::dvec2 a(samp[s].x, samp[s].y);
+            const glm::dvec2 b(samp[s + 1].x, samp[s + 1].y);
+            const glm::dvec2 ab = b - a;
+            const double len2 = glm::dot(ab, ab);
+            if (len2 < 1e-18) continue;
+            const double t = std::clamp(glm::dot(p - a, ab) / len2, 0.0, 1.0);
+            const glm::dvec2 cand = a + ab * t;
+            const double d = glm::length(cand - p);
+            if (d < bestD) { bestD = d; seg = s; q = cand; }
+        }
+        out.point = q;
+        out.tangent = glm::dvec2(samp[seg + 1].x - samp[seg].x,
+                                 samp[seg + 1].y - samp[seg].y);
+        if (glm::length(out.tangent) < 1e-12) return out;
+        out.tangent = glm::normalize(out.tangent);
+        // Curvature from three samples bracketing the contact segment.
+        if (samp.size() >= 3) {
+            const size_t mid = std::min(seg + 1, samp.size() - 2);
+            const size_t lo = mid > 0 ? mid - 1 : 0;
+            const size_t hi = std::min(mid + 1, samp.size() - 1);
+            mengerCurvature(glm::dvec2(samp[lo].x, samp[lo].y),
+                            glm::dvec2(samp[mid].x, samp[mid].y),
+                            glm::dvec2(samp[hi].x, samp[hi].y),
+                            out.curvature, out.normal);
+        }
+        out.valid = true;
+        return out;
+    }
+    return out;
+}
+
+// Both Tangent/G2 passes (enforcement and end conditions) must agree on WHICH
+// end is bound, or the conditions would be built for one end while the other
+// is moved. Same rule both sides: the end whose projection lands closer.
+// Returns the bound end's point id, or -1 when the curve id resolves to
+// nothing projectable.
+int splineContactEnd(const Sketch& sk, const SketchSpline& sp, int curveId,
+                     const SketchPoint* pStart, const SketchPoint* pEnd,
+                     CurveContact& outContact) {
+    const CurveContact cs = curveContact(sk, curveId, pStart->pos);
+    const CurveContact ce = curveContact(sk, curveId, pEnd->pos);
+    if (!cs.valid && !ce.valid) return -1;
+    const double ds = cs.valid
+        ? glm::length(cs.point - glm::dvec2(pStart->pos.x, pStart->pos.y))
+        : std::numeric_limits<double>::max();
+    const double de = ce.valid
+        ? glm::length(ce.point - glm::dvec2(pEnd->pos.x, pEnd->pos.y))
+        : std::numeric_limits<double>::max();
+    if (cs.valid && ds <= de) { outContact = cs; return pStart->id; }
+    outContact = ce;
+    return pEnd->id;
+}
+
+} // anonymous namespace
+
+void Sketch::splineEndConditions(const SketchSpline& sp,
+                                 SplineEndCondition& start,
+                                 SplineEndCondition& end) const {
+    start = SplineEndCondition();
+    end = SplineEndCondition();
+    const auto& ids = sp.controlPointIds;
+    if (ids.size() < 2) return;
+    const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+    if (closedSp) return; // only open splines bind
+    // Hot path (every frame per spline): bail before any sampling when no
+    // contact constraint names this spline.
+    bool anyContact = false;
+    for (const auto& c : m_constraints)
+        if ((c.type == ConstraintType::Tangent || c.type == ConstraintType::G2) &&
+            c.entityA == sp.id) { anyContact = true; break; }
+    if (!anyContact) return;
+    const SketchPoint* pStart = getPoint(ids.front());
+    const SketchPoint* pEnd = getPoint(ids.back());
+    if (!pStart || !pEnd) return;
+
+    // The spline's own tangents at each end WITHOUT conditions - they pick
+    // the sign of the contact direction (dot > 0: leave along the contact,
+    // never back along the spline). Closed splines returned above, so the
+    // control list here is the open one.
+    std::vector<glm::vec2> ctrl;
+    ctrl.reserve(ids.size());
+    for (int id : ids) {
+        const SketchPoint* cp = getPoint(id);
+        if (cp) ctrl.push_back(cp->pos);
+    }
+    const std::vector<glm::vec2> plain = interpolate2D(ctrl, 8, false);
+    if (plain.size() < 2) return;
+    const glm::dvec2 tanStart(plain[1].x - plain[0].x,
+                              plain[1].y - plain[0].y);
+    const glm::dvec2 tanEnd(plain.back().x - plain[plain.size() - 2].x,
+                            plain.back().y - plain[plain.size() - 2].y);
+
+    for (const auto& c : m_constraints) {
+        if (c.type != ConstraintType::Tangent && c.type != ConstraintType::G2)
+            continue;
+        if (c.entityA != sp.id || c.entityB < 0) continue;
+        CurveContact cc;
+        const int endId =
+            splineContactEnd(*this, sp, c.entityB, pStart, pEnd, cc);
+        if (endId < 0 || !cc.valid) continue;
+        const bool atStart = (endId == pStart->id);
+        const glm::dvec2& natural = atStart ? tanStart : tanEnd;
+        if (glm::length(natural) < 1e-12) continue;
+        SplineEndCondition cond;
+        cond.active = true;
+        cond.g2 = (c.type == ConstraintType::G2);
+        cond.dir = cc.tangent;
+        if (glm::dot(cond.dir, natural) < 0.0) cond.dir = -cond.dir;
+        cond.curvature = cc.curvature;
+        // The centre of curvature is a geometric point: the same vector works
+        // whichever way the contact direction was sign-aligned (p'' at a point
+        // does not flip when the traversal direction does).
+        cond.normal = cc.normal;
+        if (atStart) start = cond;
+        else end = cond;
+    }
+}
+
+void Sketch::enforceSplineContacts() {
+    for (auto& c : m_constraints) {
+        if (c.type != ConstraintType::Tangent && c.type != ConstraintType::G2)
+            continue;
+        // Non-driving (reference) constraints annotate only, like the solver.
+        if (!c.isDriving) { c.isSatisfied = true; continue; }
+        const SketchSpline* sp = nullptr;
+        for (const auto& s : m_splines)
+            if (s.id == c.entityA) { sp = &s; break; }
+        if (!sp) continue;
+        const auto& ids = sp->controlPointIds;
+        if (ids.size() < 2 ||
+            (ids.size() > 2 && ids.front() == ids.back())) {
+            c.isSatisfied = false; // closed spline: binding not applicable
+            continue;
+        }
+        SketchPoint* pStart = findPoint(ids.front());
+        SketchPoint* pEnd = findPoint(ids.back());
+        if (!pStart || !pEnd) continue;
+        CurveContact cc;
+        const int endId = splineContactEnd(*this, *sp, c.entityB, pStart, pEnd, cc);
+        if (endId < 0 || !cc.valid) continue;
+        const glm::vec2 contact(static_cast<float>(cc.point.x),
+                                static_cast<float>(cc.point.y));
+        // A Fixed point, or an endpoint the reference curve itself owns, is
+        // the anchor of the contact - measure, don't move.
+        bool locked = false;
+        for (const auto& f : m_constraints)
+            if (f.isDriving && f.type == ConstraintType::Fixed &&
+                f.entityA == endId) {
+                locked = true;
+                break;
+            }
+        if (!locked) {
+            for (const auto& l : m_lines)
+                if (l.id == c.entityB &&
+                    (l.startPointId == endId || l.endPointId == endId))
+                    locked = true;
+            for (const auto& a : m_arcs)
+                if (a.id == c.entityB &&
+                    (a.startPointId == endId || a.endPointId == endId))
+                    locked = true;
+            for (const auto& s : m_splines)
+                if (s.id == c.entityB &&
+                    !s.controlPointIds.empty() &&
+                    (s.controlPointIds.front() == endId ||
+                     s.controlPointIds.back() == endId))
+                    locked = true;
+        }
+        if (!locked) movePoint(endId, contact);
+        // Measure AFTER the move: a moved end sits exactly on the curve
+        // (satisfied); a locked one reports its true residual distance.
+        const SketchPoint* after = getPoint(endId);
+        const double dist = glm::length(
+            cc.point - glm::dvec2(after->pos.x, after->pos.y));
+        c.isSatisfied = dist < 1e-4; // mm
+    }
+}
+
+std::vector<fitspline::Constraint> Sketch::worldSplineEndConditions(
+    const SketchSpline& sp, const std::vector<glm::dvec3>& pts3) const {
+    std::vector<fitspline::Constraint> conds;
+    if (pts3.size() < 2) return conds;
+    SplineEndCondition sc, ec;
+    splineEndConditions(sp, sc, ec);
+    if (!sc.active && !ec.active) return conds;
+    double chord = 0.0;
+    for (size_t k = 1; k < pts3.size(); ++k)
+        chord += glm::length(pts3[k] - pts3[k - 1]);
+    if (chord < 1e-12) return conds;
+    // sketchToWorld has no scale, so directions map through the plane axes.
+    const gp_Ax3& ax = m_plane.Position();
+    auto worldDir = [&](const glm::dvec2& d) {
+        return glm::dvec3(d.x * ax.XDirection().X() + d.y * ax.YDirection().X(),
+                          d.x * ax.XDirection().Y() + d.y * ax.YDirection().Y(),
+                          d.x * ax.XDirection().Z() + d.y * ax.YDirection().Z());
+    };
+    auto push = [&](bool isStart, const SplineEndCondition& c) {
+        fitspline::Constraint fc;
+        fc.index = isStart ? 0 : static_cast<int>(pts3.size()) - 1;
+        fc.d1 = worldDir(c.dir) * chord;
+        if (c.g2) fc.d2 = worldDir(c.normal) * (c.curvature * chord * chord);
+        conds.push_back(fc);
+    };
+    if (sc.active) push(true, sc);
+    if (ec.active) push(false, ec);
+    return conds;
 }
 
 const std::vector<SketchPolygon>& Sketch::getPolygons() const {
@@ -1561,7 +1943,13 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
                     pts3.emplace_back(w.X(), w.Y(), w.Z());
                 }
                 std::vector<double> params;
-                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(pts3, closedSp, params);
+                // Tangent/G2 end conditions (TZ-22) in world directions: the
+                // exact edge IS the conditioned curve the renderer draws.
+                const std::vector<fitspline::Constraint> conds =
+                    worldSplineEndConditions(sp, pts3);
+                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(
+                    pts3, closedSp, params,
+                    conds.empty() ? nullptr : &conds);
                 // The interpolant is memoised; an edge must own its geometry.
                 if (!curve.IsNull()) curve = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
                 if (!curve.IsNull()) {
@@ -2442,7 +2830,12 @@ std::vector<Sketch::Region> Sketch::buildRegionsUncached(
             }
             std::vector<double> params;
             try {
-                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(pts3, closedSp, params);
+                // Same conditioned interpolant emitOcctEdge emits (TZ-22).
+                const std::vector<fitspline::Constraint> conds =
+                    worldSplineEndConditions(sp, pts3);
+                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(
+                    pts3, closedSp, params,
+                    conds.empty() ? nullptr : &conds);
                 // The interpolant is memoised; an edge must own its geometry.
                 if (!curve.IsNull()) curve = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
                 if (curve.IsNull()) continue;
