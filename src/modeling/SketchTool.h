@@ -95,12 +95,12 @@ public:
     // only already-selected points move, Fusion-style). onMouseMove drives it,
     // onMouseUp ends it - same machinery as the Select tool's drag.
     void beginPointDrag(int pointId) { m_dragPointId = pointId; m_isDragging = true; }
-    // Fork: "Add point" button. True when exactly one spline control point is
-    // selected; insertSplinePointAfterSelected() puts a new control point on
-    // the curve halfway to the next one (to the previous one at an open end),
-    // selects it and returns its id (-1 if nothing to do).
-    bool canInsertSplinePoint() const;
-    int insertSplinePointAfterSelected();
+    // Fork: Fusion-style "Add point". selectedSplineForInsert() is the spline
+    // the button acts on (one spline selected, or one of its control points),
+    // -1 otherwise. insertSplinePointAt() puts a control point on that spline
+    // where the tap lands (if within tolMm of the curve) and returns its id.
+    int selectedSplineForInsert() const;
+    int insertSplinePointAt(int splineId, glm::vec2 pos, float tolMm);
     const std::set<int>& getSelectedLines()   const { return m_selectedLines; }
     const std::set<int>& getSelectedCircles() const { return m_selectedCircles; }
     const std::set<int>& getSelectedArcs()    const { return m_selectedArcs; }

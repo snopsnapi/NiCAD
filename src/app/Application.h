@@ -1103,6 +1103,9 @@ private:
     // Fork: history step of the last sketch point-drag commit; Back undoes that
     // move first instead of popping the in-progress spline's last point.
     int m_lastSketchDragStep = -1;
+    // Fork: Fusion-style "Add point" mode - taps on this spline insert points.
+    bool m_splineInsertMode = false;
+    int  m_splineInsertTarget = -1;
     // Previous-frame hover state for the corner snap widget. The widget is
     // hit-tested with raw IsMouseHoveringRect (no ImGui item) so it can't
     // claim input via the usual IsItemActive path; instead the viewport

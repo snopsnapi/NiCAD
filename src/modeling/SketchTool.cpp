@@ -2939,45 +2939,52 @@ void SketchTool::handleArcTool(glm::vec2 pos) {
     }
 }
 
-bool SketchTool::canInsertSplinePoint() const {
-    if (!m_sketch || m_selectedPoints.size() != 1) return false;
-    const int pid = *m_selectedPoints.begin();
-    for (const auto& sp : m_sketch->getSplines())
-        for (int cid : sp.controlPointIds)
-            if (cid == pid) return true;
-    return false;
+int SketchTool::selectedSplineForInsert() const {
+    if (!m_sketch) return -1;
+    if (m_selectedSplines.size() == 1 && m_selectedPoints.empty())
+        return *m_selectedSplines.begin();
+    if (m_selectedPoints.size() == 1 && m_selectedSplines.empty()) {
+        const int pid = *m_selectedPoints.begin();
+        for (const auto& sp : m_sketch->getSplines())
+            for (int cid : sp.controlPointIds)
+                if (cid == pid) return sp.id;
+    }
+    return -1;
 }
 
-int SketchTool::insertSplinePointAfterSelected() {
-    if (!canInsertSplinePoint()) return -1;
-    const int pid = *m_selectedPoints.begin();
+int SketchTool::insertSplinePointAt(int splineId, glm::vec2 pos, float tolMm) {
+    if (!m_sketch) return -1;
     for (const auto& sp : m_sketch->getSplines()) {
-        const auto& ids = sp.controlPointIds;
-        const bool closed = ids.size() > 2 && ids.front() == ids.back();
-        const int n = static_cast<int>(ids.size()) - (closed ? 1 : 0);   // unique points
-        int k = -1;
-        for (int i = 0; i < n; ++i) if (ids[i] == pid) { k = i; break; }
-        if (k < 0) continue;
-        // Span to split: k -> k+1, or k-1 -> k at the open end.
-        int a = k;
-        if (!closed && k == n - 1) a = k - 1;
-        if (a < 0) return -1;
+        if (sp.id != splineId) continue;
         std::vector<int> cidx, cids;
         const std::vector<glm::vec2> samp = m_sketch->sampleSpline2D(sp, 24, &cidx, &cids);
-        if (a + 1 >= static_cast<int>(cidx.size())) return -1;
-        const int s0 = cidx[a], s1 = cidx[a + 1];
-        if (s1 <= s0 || s1 >= static_cast<int>(samp.size())) return -1;
-        const glm::vec2 pos = samp[(s0 + s1) / 2];          // on the current curve
-        const int splineId = sp.id;
-        const int newId = m_sketch->addPoint(pos);
-        if (!m_sketch->insertSplineControlPoint(splineId, a + 1, newId)) return -1;
-        if (splineId == m_activeSplineId) {
-            // Keep the in-progress list in step with the element.
-            auto it = std::find(m_splinePoints.begin(), m_splinePoints.end(), ids[a]);
-            if (it != m_splinePoints.end()) m_splinePoints.insert(it + 1, newId);
+        if (samp.size() < 2 || cidx.size() < 2) return -1;
+        // Nearest point on the sampled curve (segment projection).
+        float best = tolMm;
+        int bestSeg = -1;
+        glm::vec2 bestPos(0.0f);
+        for (size_t i = 0; i + 1 < samp.size(); ++i) {
+            const glm::vec2 a = samp[i], d = samp[i + 1] - a;
+            const float l2 = glm::dot(d, d);
+            const float t = l2 > 1e-12f ? glm::clamp(glm::dot(pos - a, d) / l2, 0.0f, 1.0f) : 0.0f;
+            const glm::vec2 q = a + d * t;
+            const float dist = glm::length(pos - q);
+            if (dist < best) { best = dist; bestSeg = static_cast<int>(i); bestPos = q; }
         }
-        m_selectedPoints.clear();
-        m_selectedPoints.insert(newId);
+        if (bestSeg < 0) return -1;
+        // Span k holds samples [cidx[k], cidx[k+1]); insert after control k.
+        int k = -1;
+        for (size_t j = 0; j + 1 < cidx.size(); ++j)
+            if (bestSeg >= cidx[j] && bestSeg < cidx[j + 1]) { k = static_cast<int>(j); break; }
+        if (k < 0) return -1;
+        // Don't stack a point onto an existing control point.
+        for (int cid : sp.controlPointIds)
+            if (const SketchPoint* p = m_sketch->getPoint(cid))
+                if (glm::length(p->pos - bestPos) < tolMm * 0.25f) return -1;
+        const int newId = m_sketch->addPoint(bestPos);
+        if (!m_sketch->insertSplineControlPoint(splineId, k + 1, newId)) return -1;
+        if (splineId == m_activeSplineId && k + 1 <= static_cast<int>(m_splinePoints.size()))
+            m_splinePoints.insert(m_splinePoints.begin() + (k + 1), newId);
         return newId;
     }
     return -1;

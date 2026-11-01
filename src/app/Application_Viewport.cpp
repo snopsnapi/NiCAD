@@ -6871,6 +6871,20 @@ void Application::renderViewport() {
                     // is awkward - click, Enter, click instead of just
                     // clicking the same point twice".)
                     recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
+                } else if (m_splineInsertMode &&
+                           m_sketchTool->getMode() == SketchToolMode::Select &&
+                           ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                           !m_dimEditingClickedThisFrame && !m_moveModeToggle) {
+                    // Fork: Add-point mode - a tap ON the target spline inserts a
+                    // control point there; anywhere else does nothing.
+                    float tol = 0.5f;
+                    if (m_sketchTool->pixelScale() > 0.0f)
+                        tol = std::max(tol, (materializr::touchMode() ? 32.0f : 12.0f) *
+                                            uiScale() * m_sketchTool->pixelScale());
+                    const int target = m_splineInsertTarget;
+                    recordSketchMutation([&]{
+                        m_sketchTool->insertSplinePointAt(target, sketchCoord, tol); });
+                    m_sketchDragBefore.reset();
                 } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                            !m_dimEditingClickedThisFrame && !m_moveModeToggle) {
                     // m_dimEditingClickedThisFrame is set when a click landed
@@ -7445,16 +7459,37 @@ void Application::renderViewport() {
                     ImGui::PopStyleColor(2);
                     if (del) deleteSelectedSketchElements();
                     if (dhov) ImGui::SetTooltip("%s", materializr::tr("Delete the selected sketch elements (undoable)"));
-                    // Fork: insert a control point into a spline next to the
-                    // selected one (on the curve, then drag it).
-                    if (m_sketchTool->canInsertSplinePoint()) {
-                        ImGui::SameLine();
+                }
+            }
+            // Fork: Fusion-style Add point. Select a spline (or one of its
+            // points) -> "Add point" -> taps on that spline insert points ->
+            // the same button again ("Done adding") ends it.
+            if (m_inSketchMode && m_sketchTool) {
+                if (m_splineInsertMode &&
+                    (m_sketchTool->getMode() != SketchToolMode::Select || !m_activeSketch)) {
+                    m_splineInsertMode = false; m_splineInsertTarget = -1;
+                }
+                const int target = m_splineInsertMode ? m_splineInsertTarget
+                                                      : m_sketchTool->selectedSplineForInsert();
+                if (target >= 0 && m_sketchTool->getMode() == SketchToolMode::Select) {
+                    if (anyBtn) ImGui::SameLine();
+                    anyBtn = true;
+                    if (m_splineInsertMode) {
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.90f, 0.55f, 0.15f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.00f, 0.65f, 0.25f, 1.0f));
+                    } else {
                         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.48f, 0.85f, 0.97f));
                         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.58f, 0.95f, 1.0f));
-                        const bool add = wideButton("Add point");
-                        ImGui::PopStyleColor(2);
-                        if (add)
-                            recordSketchMutation([&]{ m_sketchTool->insertSplinePointAfterSelected(); });
+                    }
+                    const bool pressed = wideButton(m_splineInsertMode ? "Done adding" : "Add point");
+                    ImGui::PopStyleColor(2);
+                    if (pressed) {
+                        if (m_splineInsertMode) {
+                            m_splineInsertMode = false; m_splineInsertTarget = -1;
+                        } else {
+                            m_splineInsertMode = true; m_splineInsertTarget = target;
+                            m_sketchTool->clearElementSelection();   // the spline stops glowing
+                        }
                     }
                 }
             }
