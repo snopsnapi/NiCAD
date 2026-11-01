@@ -865,8 +865,7 @@ void Application::renderImTouchLayout() {
                                t.action == ToolAction::Scale) {
                         transform.push_back(&t); continue;
                     } else if (t.action == ToolAction::MergeFaces ||
-                               t.action == ToolAction::RemoveFace ||
-                               t.action == ToolAction::OffsetFace) {
+                               t.action == ToolAction::RemoveFace) {
                         repair.push_back(&t); continue;
                     }
                     flatButton(t, railIdx++);

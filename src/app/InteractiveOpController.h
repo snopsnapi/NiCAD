@@ -32,6 +32,14 @@ struct IopPanelPlace {
     bool  anchorValid = false;
     float anchorX = 0.0f;
     float anchorY = 0.0f;
+    // Screen rect of the 3D "Viewport" window, cached by the app every frame.
+    // The scaffold panel seeds its position inside this rect: at its call
+    // site ImGui's "current window" is the implicit fallback Debug##Default
+    // window, not the viewport. All zero until the viewport rendered once.
+    float viewportX = 0.0f;
+    float viewportY = 0.0f;
+    float viewportW = 0.0f;
+    float viewportH = 0.0f;
 };
 
 // Everything an interactive-op controller needs from the app, without

@@ -328,6 +328,17 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
                 "Push/pull the face along its normal.");
             add(MZ_ICON_EXTRUDE,  "Extrude", ToolAction::ExtrudeSketch, false,
                 "Extrude the face into new material.");
+        }
+        // Offset Face sits right after Push/Pull in the rail (it is NOT
+        // planar-gated: offsetting a cylinder into a taller one is the
+        // everyday use). Its own button in the touch rails - not the Repair
+        // group (task 12).
+        add(MZ_ICON_PUSHPULL, "Offset Face", ToolAction::OffsetFace, false,
+            "Move the picked face(s) in or out along their normal - drag the "
+            "arrow on the face, or type a distance. Adjacent fillets/chamfers "
+            "come off first when moving out, so the face moves and the round "
+            "comes back sharp.");
+        if (m_selFacePlanar) {
             add(MZ_ICON_SHELL,    "Shell",   ToolAction::Shell, false,
                 "Hollow the body, leaving this face open.");
             // THE face-scale tool. There used to be a second one - the
@@ -357,11 +368,6 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
         add(MZ_ICON_REPAIR,   "Remove Feature", ToolAction::RemoveFace, false,
             "Delete the picked face and heal the body over it - takes a baked "
             "fillet or chamfer back to a sharp edge so it can be re-applied.");
-        add(MZ_ICON_PUSHPULL, "Offset Face", ToolAction::OffsetFace, false,
-            "Move the picked face(s) in or out along their normal - drag the "
-            "arrow on the face, or type a distance. Adjacent fillets/chamfers "
-            "come off first when moving out, so the face moves and the round "
-            "comes back sharp.");
         add(MZ_ICON_PROJECT,  "Project", ToolAction::ProjectSketch, false,
             "Project a sketch onto this face along the sketch's normal, then "
             "engrave (cut in) or emboss (raise out) to a depth.");
