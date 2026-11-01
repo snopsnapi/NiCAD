@@ -536,8 +536,7 @@ void Application::renderModernLayout() {
                         case ToolAction::SketchSvg:
                         case ToolAction::SketchAirfoil:        return 3;
                         case ToolAction::MergeFaces:
-                        case ToolAction::RemoveFace:
-                        case ToolAction::OffsetFace:           return 4;
+                        case ToolAction::RemoveFace:           return 4;
                         default: return 0;
                     }
                 };

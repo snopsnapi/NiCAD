@@ -7,6 +7,7 @@
 #include "../core/SelectionManager.h"
 #include "../core/Operation.h"
 #include <imgui.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <optional>
@@ -387,11 +388,18 @@ void InteractiveOpController::cleanup() {
 void InteractiveOpController::renderPanel(const IopContext& ctx) {
     if (!m_active) return;
 
-    // Seed the panel's RIGHT edge a fixed margin inside the viewport (pivot 1,0)
-    // and let it grow leftward. The panel is AlwaysAutoResize and, on touch, its
-    // padded content is wider than panelWidth() - anchoring the LEFT edge by a
-    // fixed offset (winWidth - w - 20) let that extra width run off the right
-    // edge on the tablet. Right-anchoring keeps it on-screen at any scale.
+    // Seed the panel's RIGHT edge a fixed margin inside the 3D viewport
+    // (pivot 1,0) and let it grow leftward. The panel is AlwaysAutoResize
+    // and, on touch, its padded content is wider than panelWidth() -
+    // anchoring the LEFT edge by a fixed offset (winWidth - w - 20) let that
+    // extra width run off the right edge on the tablet. Right-anchoring keeps
+    // it on-screen at any scale.
+    //
+    // The anchor is the Viewport window rect passed in via IopContext, NOT
+    // ImGui's "current window": this runs at top level between root windows,
+    // where the current window is the implicit fallback Debug##Default
+    // (~400x400 at 60,60 in imgui v1.92.8), so on the tablet the panel was
+    // wider than that rect and ran off the left edge on the first frame.
     //
     // ImGuiCond_Appearing + no NoMove flag: same as the Pattern / Edit-Diameter
     // popups - seed the position on first appearance, then let the user drag the
@@ -399,9 +407,21 @@ void InteractiveOpController::renderPanel(const IopContext& ctx) {
     // im-touch with no way to move it - issue #29). Dragging the panel body
     // (there's no title bar) moves it.
     const float w = panelWidth();
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x +
-                                       ImGui::GetWindowWidth() - 20.0f,
-                                   ImGui::GetWindowPos().y + 50.0f),
+    ImVec2 hostPos = ImGui::GetMainViewport()->WorkPos;
+    ImVec2 hostSize = ImGui::GetMainViewport()->WorkSize;
+    if (ctx.panel.viewportW > 0.0f && ctx.panel.viewportH > 0.0f) {
+        hostPos = ImVec2(ctx.panel.viewportX, ctx.panel.viewportY);
+        hostSize = ImVec2(ctx.panel.viewportW, ctx.panel.viewportH);
+    }
+    const ImGuiViewport* work = ImGui::GetMainViewport();
+    // Right edge a margin inside the viewport, but never so far left that
+    // the auto-resized body overflows the left edge of the work area.
+    const float right = std::max(hostPos.x + hostSize.x - 20.0f,
+                                 work->WorkPos.x + w + 20.0f);
+    // Below the im-touch top chrome (menu chip / history cluster); 0 elsewhere.
+    const float top = std::max(hostPos.y,
+                               materializr::viewportTopChromeBottom()) + 50.0f;
+    ImGui::SetNextWindowPos(ImVec2(right, top),
                             ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_Appearing);
     char id[64];

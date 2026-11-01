@@ -1322,7 +1322,9 @@ materializr::IopContext Application::iopContext() {
         m_snapToGrid, m_sketchGridStep,
         materializr::IopPanelPlace{uiScale(), imTouchLayout(),
                                    m_actionAnchorValid, m_actionAnchorX,
-                                   m_actionAnchorY},
+                                   m_actionAnchorY,
+                                   m_viewportWinX, m_viewportWinY,
+                                   m_viewportWinW, m_viewportWinH},
         [this](int sid) { ensureSketchSourceFace(sid); },
         [this](const TopoDS_Face& f, const gp_Pln& p) {
             return findBodyUnderRegion(f, p);

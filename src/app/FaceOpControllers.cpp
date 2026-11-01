@@ -450,7 +450,10 @@ int OffsetFaceController::onBegin(const IopContext& ctx) {
     }
     if (m_faces.empty()) return -1;
 
-    m_distance = 5.0f;
+    // Start at 0: a 5 mm preview on a small body jumps off the camera, and
+    // buildOp() builds nothing while |d| < 0.01 anyway - the arrow (min
+    // screen length) is the whole gesture until the user drags or types.
+    m_distance = 0.0f;
     materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
     m_inputFocus = true;
     m_removeBlends = true;
@@ -656,7 +659,12 @@ void OffsetFaceController::panelBody(const IopContext& ctx, bool& changed) {
         changed = true;
     ImGui::TextDisabled("%s", materializr::tr("only when moving outwards"));
 
-    if (previewOk()) {
+    if (std::abs(m_distance) < 0.01f) {
+        // Just-opened (or dragged back through the face): buildOp() builds
+        // nothing at ~0, so previewOk() is false - that's neutral, not a
+        // failure. Prompt for the gesture instead of the error colour.
+        ImGui::TextDisabled("%s", materializr::tr("Drag the arrow"));
+    } else if (previewOk()) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "%s",
                            materializr::trFormat("Previewing %s",
                                materializr::fmtLength(m_distance).c_str()).c_str());
