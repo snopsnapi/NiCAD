@@ -66,6 +66,9 @@ struct InferenceGuide {
         Symmetry,          // cursor snapped to the mirror image of an existing point across a centreline / axis-aligned line → purple guide
         CornerBisector,    // anchor is a vertex of two segments; cursor is on the line that bisects their angle → dashed guide
         CornerTangent,     // same vertex, the direction a smooth curve through it would take (perpendicular to the bisector) → dashed guide
+        Origin,            // cursor snapped onto the sketch origin (0,0) → same square marker as Endpoint
+        OnAxisX,           // cursor snapped onto the sketch X axis (infinite) → red dashed guide
+        OnAxisY,           // cursor snapped onto the sketch Y axis (infinite) → green dashed guide
     };
     Kind kind;
     glm::vec2 from;    // ghost guide line start (sketch-space)
