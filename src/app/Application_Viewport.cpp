@@ -8831,6 +8831,7 @@ bool Application::captureViewportPng(std::vector<uint8_t>& pngOut) {
 // the pen's last position. A transparent full-screen window sits on top while
 // it is open, so the tap that picks an item never reaches the sketch below.
 // Tap an item -> that tool; tap anywhere else -> close.
+namespace materializr {
 void Application::renderStylusRadialMenu() {
     if (!m_stylusMenuOpen) return;
     if (!m_inSketchMode || !m_sketchTool) { m_stylusMenuOpen = false; return; }
@@ -8919,3 +8920,5 @@ void Application::renderStylusRadialMenu() {
     ImGui::End();
     ImGui::PopStyleVar(2);
 }
+
+} // namespace materializr
