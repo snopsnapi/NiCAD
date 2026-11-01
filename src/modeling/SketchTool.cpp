@@ -1035,6 +1035,29 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
             return fp;
         }
     }
+    // The sketch origin (0,0) as a VIRTUAL endpoint-grade target: placing near
+    // it snaps onto it exactly, without adding any real point to the sketch.
+    // Runs after the endpoint scans above, so a real point already sitting at
+    // the origin wins (the click welds onto it like any Endpoint). Same
+    // self-weld guard as the endpoint loop: while a segment is being drawn
+    // FROM a vertex that IS the origin, the cursor must not snap back onto its
+    // own start, and dragged (excluded) points never attract their own drag.
+    if (allowSnaps && glm::length(pos) < pointSnapThreshold) {
+        bool blocked = false;
+        for (const auto& pt : points) {
+            if (glm::length(pt.pos) >= pointSnapThreshold) continue;
+            if (m_snapExcludePoints.count(pt.id) ||
+                (m_isPlacing && m_lastPointId >= 0 && pt.id == m_lastPointId)) {
+                blocked = true;
+                break;
+            }
+        }
+        if (!blocked) {
+            m_activeInferences.push_back(
+                {InferenceGuide::Origin, glm::vec2(0.0f), glm::vec2(0.0f), -1});
+            return glm::vec2(0.0f);
+        }
+    }
     const auto& circles = m_sketch->getCircles();
     for (const auto& c : circles) {
         const SketchPoint* center = m_sketch->getPoint(c.centerPointId);
@@ -1459,6 +1482,28 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                                  proj, true, len, proj, d, true});
             }
         }
+        // Sketch axes: the infinite X / Y axes through the origin behave as
+        // VIRTUAL OnLine-grade geometry - a point drawn onto an axis reads
+        // exactly like a point drawn onto an edge, so they register as contact
+        // cands with the same onLineThresh band and no segment bounds. This is
+        // how "the end of the line rides the axis" works: contact priority in
+        // the resolver, gridAlongLine quantizing ALONG the axis (never off it).
+        {
+            const float dY = std::abs(pos.y);
+            if (dY < onLineThresh) {
+                glm::vec2 proj(pos.x, 0.0f);
+                cands.push_back({glm::vec2(0.0f), glm::vec2(1, 0),
+                                 InferenceGuide::OnAxisX, -1, glm::vec2(0.0f),
+                                 false, 0.0f, proj, dY, true});
+            }
+            const float dX = std::abs(pos.x);
+            if (dX < onLineThresh) {
+                glm::vec2 proj(0.0f, pos.y);
+                cands.push_back({glm::vec2(0.0f), glm::vec2(0, 1),
+                                 InferenceGuide::OnAxisY, -1, glm::vec2(0.0f),
+                                 false, 0.0f, proj, dX, true});
+            }
+        }
         // On-spline: cursor's projection lands anywhere along a spline curve.
         // Splines were invisible to snapping, so you couldn't anchor a line onto
         // an imported cursive stroke. Project onto the sampled curve and register
@@ -1576,6 +1621,24 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                 glm::vec2 proj(pos.x, fp.y);
                 cands.push_back({fp, glm::vec2(1,0), InferenceGuide::AxisHFromPoint,
                                  -1, fp, false, 0.0f, proj, dY, preStartAxis});
+            }
+        }
+        // The origin joins the axis-from-point sources: "level with the
+        // origin" / "under the origin" read exactly like alignment with any
+        // other point (same axisThresh band, same pre-start standalone rule).
+        {
+            const glm::vec2 O(0.0f);
+            const float dXO = std::abs(pos.x);
+            if (dXO < axisThresh) {
+                glm::vec2 proj(0.0f, pos.y);
+                cands.push_back({O, glm::vec2(0,1), InferenceGuide::AxisVFromPoint,
+                                 -1, O, false, 0.0f, proj, dXO, preStartAxis});
+            }
+            const float dYO = std::abs(pos.y);
+            if (dYO < axisThresh) {
+                glm::vec2 proj(pos.x, 0.0f);
+                cands.push_back({O, glm::vec2(1,0), InferenceGuide::AxisHFromPoint,
+                                 -1, O, false, 0.0f, proj, dYO, preStartAxis});
             }
         }
     }
@@ -1772,6 +1835,36 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                     prevF = f;
                     prevMid = mid;
                     havePrev = true;
+                }
+                // Anchor ON the curve: a line STARTED on a spline (the touch
+                // gesture presses onto it, the on-spline contact snap lands
+                // the anchor there) means "run away along the tangent HERE".
+                // The crossing scan above brackets that direction, but near an
+                // on-curve anchor (P - anchor) is near-zero length and the
+                // sign-change interpolation gets imprecise - derive the local
+                // tangent directly from the sample segment under the anchor.
+                // Circles/arcs need no such extra: checkTangent's D == R
+                // degenerate case already resolves their rim anchor onto the
+                // single tangent there.
+                {
+                    float bestD = onLineThresh;
+                    glm::vec2 bestDir(1.0f, 0.0f);
+                    bool found = false;
+                    for (size_t k = 0; k + 1 < samp.size(); ++k) {
+                        const glm::vec2 T = samp[k + 1] - samp[k];
+                        const float tl = glm::length(T);
+                        if (tl < 1e-9f) continue;
+                        const glm::vec2 dirK = T / tl;
+                        const float t = glm::clamp(glm::dot(dirAnchor - samp[k], dirK),
+                                                   0.0f, tl);
+                        const float d = glm::distance(samp[k] + dirK * t, dirAnchor);
+                        if (d < bestD) { bestD = d; bestDir = dirK; found = true; }
+                    }
+                    if (found) {
+                        const float a0 = std::atan2(bestDir.y, bestDir.x);
+                        considerRay(a0, sp.id);
+                        considerRay(a0 + static_cast<float>(M_PI), sp.id);
+                    }
                 }
             }
 
@@ -2042,7 +2135,9 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                          std::round(p.y / m_gridStep) * m_gridStep);
     };
     auto isContact = [](InferenceGuide::Kind k) {
-        return k == InferenceGuide::OnLine;
+        return k == InferenceGuide::OnLine ||
+               k == InferenceGuide::OnAxisX ||
+               k == InferenceGuide::OnAxisY;
     };
     // A guide direction and the snap lattice can only both be honoured when
     // the ray is AXIS-ALIGNED: such a ray passes through lattice points, so

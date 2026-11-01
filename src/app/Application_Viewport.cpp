@@ -2477,7 +2477,18 @@ void Application::renderViewport() {
                         case InferenceGuide::Midpoint:
                         case InferenceGuide::OnLine:
                         case InferenceGuide::OnCircle:
+                        case InferenceGuide::Origin:
                             // Markers: shape carries the meaning.
+                            break;
+                        case InferenceGuide::OnAxisX:
+                            // Sketch X axis - red, matching the gizmo's X arm.
+                            dashed = true;
+                            col = IM_COL32(230, 70, 70, 255);
+                            break;
+                        case InferenceGuide::OnAxisY:
+                            // Sketch Y axis - green, matching the gizmo's Y arm.
+                            dashed = true;
+                            col = IM_COL32(90, 200, 90, 255);
                             break;
                         case InferenceGuide::AxisHFromPoint:
                         case InferenceGuide::AxisVFromPoint:
@@ -2505,8 +2516,11 @@ void Application::renderViewport() {
                     ImVec2 sa, sb;
                     if (!toImg(sk2w(g.from), sa)) continue;
                     if (!toImg(sk2w(g.to), sb))   continue;
-                    if (g.kind == InferenceGuide::Endpoint) {
+                    if (g.kind == InferenceGuide::Endpoint ||
+                        g.kind == InferenceGuide::Origin) {
                         // Square marker AT the anchor point, with dark halo.
+                        // Origin reuses the Endpoint marker - it IS an
+                        // endpoint-grade snap, just onto the virtual (0,0).
                         const float r = 5.0f;
                         dl->AddRect(ImVec2(sa.x - r - 1, sa.y - r - 1),
                                     ImVec2(sa.x + r + 1, sa.y + r + 1),
@@ -2560,7 +2574,9 @@ void Application::renderViewport() {
                             g.kind == InferenceGuide::AxisVFromPoint ||
                             g.kind == InferenceGuide::PerpToRef ||
                             g.kind == InferenceGuide::CornerBisector ||
-                            g.kind == InferenceGuide::CornerTangent) {
+                            g.kind == InferenceGuide::CornerTangent ||
+                            g.kind == InferenceGuide::OnAxisX ||
+                            g.kind == InferenceGuide::OnAxisY) {
                             dl->AddCircleFilled(sa, 5.5f, halo);
                             dl->AddCircleFilled(sa, 4.0f, col);
                         }
@@ -2850,6 +2866,9 @@ void Application::renderViewport() {
                             case InferenceGuide::Symmetry:        return "Symmetry";
                             case InferenceGuide::CornerBisector:  return "Corner Bisector";
                             case InferenceGuide::CornerTangent:   return "Corner Tangent";
+                            case InferenceGuide::Origin:          return "Origin";
+                            case InferenceGuide::OnAxisX:         return "On X Axis";
+                            case InferenceGuide::OnAxisY:         return "On Y Axis";
                         }
                         return "";
                     };
