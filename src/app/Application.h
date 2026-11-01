@@ -1146,6 +1146,9 @@ private:
     // Fork: Fusion-style "Add point" mode - taps on this spline insert points.
     bool m_splineInsertMode = false;
     int  m_splineInsertTarget = -1;
+    // Fork: curvature comb on the active sketch's splines (touch bar "Comb").
+    bool  m_showCurvatureComb = false;
+    float m_combScale = 1.0f;   // user multiplier over the auto scale (+/- buttons)
     // Previous-frame hover state for the corner snap widget. The widget is
     // hit-tested with raw IsMouseHoveringRect (no ImGui item) so it can't
     // claim input via the usual IsItemActive path; instead the viewport

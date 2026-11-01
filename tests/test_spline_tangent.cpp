@@ -163,3 +163,77 @@ TEST(SplineTangent, ClosedSplineBindsNothing) {
     EXPECT_EQ(sk.getPoint(p2)->pos, glm::vec2(5.0f, 5.0f));
     EXPECT_EQ(sk.getPoint(p3)->pos, glm::vec2(5.0f, 0.0f));
 }
+
+// Curvature comb (fork): curvature from the exact interpolant's d1/d2.
+// A closed spline through 32 points on a circle R=10 (CCW) is very nearly
+// that circle: k ~ 1/R everywhere (a cubic ripples a few % between the
+// points), positive, and normal*k points at the centre.
+TEST(CurvatureComb, CircleLikeSplineHasCurvatureOneOverR) {
+    const double R = 10.0;
+    std::vector<glm::vec2> ctrl;
+    for (int i = 0; i < 32; ++i) {
+        const double a = 2.0 * 3.14159265358979323846 * i / 32.0;
+        ctrl.emplace_back(static_cast<float>(R * std::cos(a)),
+                          static_cast<float>(R * std::sin(a)));
+    }
+    const std::vector<CurvatureCombSample> comb =
+        Sketch::curvatureComb2D(ctrl, 8, true);
+    ASSERT_EQ(comb.size(), 32u * 8u + 1u);
+    double mean = 0.0;
+    for (const CurvatureCombSample& s : comb) {
+        mean += s.curvature / comb.size();
+        EXPECT_NEAR(s.curvature, 1.0 / R, 0.05 / R);
+        EXPECT_NEAR(glm::length(s.normal), 1.0, 1e-9);
+        // The tooth direction points at the centre (origin).
+        const glm::dvec2 toCentre = -glm::normalize(s.point);
+        EXPECT_GT(glm::dot(s.normal * s.curvature, toCentre), 0.0);
+    }
+    EXPECT_NEAR(mean, 1.0 / R, 0.01 / R);
+    // Clockwise traversal: same |k|, sign flips, tooth still toward centre.
+    std::vector<glm::vec2> rev(ctrl.rbegin(), ctrl.rend());
+    const std::vector<CurvatureCombSample> combCw =
+        Sketch::curvatureComb2D(rev, 8, true);
+    ASSERT_FALSE(combCw.empty());
+    for (const CurvatureCombSample& s : combCw) {
+        EXPECT_NEAR(s.curvature, -1.0 / R, 0.05 / R);
+        EXPECT_GT(glm::dot(s.normal * s.curvature, -glm::normalize(s.point)), 0.0);
+    }
+}
+
+// The comb follows the spline's G2 end condition: at the end bound to the
+// circle R=10 it reads the circle's curvature exactly (analytic d2), and its
+// end point is the drawn curve's end point.
+TEST(CurvatureComb, FollowsG2EndCondition) {
+    Sketch sk;
+    const int center = sk.addPoint(glm::vec2(0.0f, 0.0f));
+    const int circle = sk.addCircle(center, 10.0);
+    std::vector<int> pts;
+    pts.push_back(sk.addPoint(glm::vec2(0.0f, 8.0f)));
+    pts.push_back(sk.addPoint(glm::vec2(3.0f, 9.0f)));
+    pts.push_back(sk.addPoint(glm::vec2(7.0f, 8.0f)));
+    pts.push_back(sk.addPoint(glm::vec2(10.5f, 3.0f)));
+    const int spline = sk.addSpline(pts);
+    addContact(sk, ConstraintType::G2, spline, circle);
+    sk.enforceSplineContacts();
+
+    const SketchSpline& sp = sk.getSplines().front();
+    const std::vector<CurvatureCombSample> comb = sk.curvatureComb(sp, 8);
+    ASSERT_EQ(comb.size(), 3u * 8u + 1u);
+    EXPECT_NEAR(std::abs(comb.back().curvature), 0.1, 1e-3);
+    // Tooth at the bound end points toward the circle's centre.
+    EXPECT_GT(glm::dot(comb.back().normal * comb.back().curvature,
+                       -glm::normalize(comb.back().point)), 0.0);
+    const std::vector<glm::vec2> samp = sk.sampleSpline2D(sp, 8);
+    EXPECT_NEAR(comb.back().point.x, samp.back().x, 1e-5);
+    EXPECT_NEAR(comb.back().point.y, samp.back().y, 1e-5);
+
+    // Without the contact the free spline's end curvature differs.
+    Sketch free;
+    std::vector<int> fp;
+    for (int id : pts) fp.push_back(free.addPoint(sk.getPoint(id)->pos));
+    free.addSpline(fp);
+    const std::vector<CurvatureCombSample> freeComb =
+        free.curvatureComb(free.getSplines().front(), 8);
+    ASSERT_FALSE(freeComb.empty());
+    EXPECT_GT(std::abs(std::abs(freeComb.back().curvature) - 0.1), 1e-2);
+}

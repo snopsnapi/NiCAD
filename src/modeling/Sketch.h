@@ -83,6 +83,16 @@ struct SplineEndCondition {
     glm::dvec2 normal{0.0};
 };
 
+// One sample of a spline's curvature comb (fork). `normal` is the unit left
+// normal of the direction of travel; `curvature` is signed (> 0: the centre
+// of curvature lies on the `normal` side), so normal * curvature always
+// points toward the centre and a comb tooth is point + normal*curvature*scale.
+struct CurvatureCombSample {
+    glm::dvec2 point{0.0};
+    glm::dvec2 normal{0.0};
+    double curvature = 0.0;
+};
+
 struct SketchPolygon {
     int id;
     int centerPointId;
@@ -166,6 +176,21 @@ public:
         bool closed = false, std::vector<int>* spanStartIdx = nullptr,
         const SplineEndCondition& startCond = SplineEndCondition(),
         const SplineEndCondition& endCond = SplineEndCondition());
+
+    // Curvature comb samples along the exact interpolant through `ctrl`
+    // (the curve interpolate2D draws, with the same end conditions):
+    // `samplesPerSpan` per control span, uniform in the curve parameter,
+    // plus a final sample at the end (closed: the seam again). Curvature
+    // comes from the curve's analytic d1/d2: k = (x'y'' - y'x'') / |r'|^3.
+    // Empty when the curve cannot be built.
+    static std::vector<CurvatureCombSample> curvatureComb2D(
+        const std::vector<glm::vec2>& ctrl, int samplesPerSpan, bool closed,
+        const SplineEndCondition& startCond = SplineEndCondition(),
+        const SplineEndCondition& endCond = SplineEndCondition());
+    // curvatureComb2D for a sketch spline, with its Tangent/G2 end
+    // conditions (splineEndConditions).
+    std::vector<CurvatureCombSample> curvatureComb(const SketchSpline& sp,
+                                                   int samplesPerSpan = 24) const;
 
     // --- Spline Tangent/G2 contacts (TZ-22) --------------------------------
     // Fill `start`/`end` from the sketch's Tangent/G2 constraints on `sp`

@@ -3049,6 +3049,77 @@ void Application::renderViewport() {
                 glm::vec3 dX(dax.XDirection().X(), dax.XDirection().Y(), dax.XDirection().Z());
                 glm::vec3 dY(dax.YDirection().X(), dax.YDirection().Y(), dax.YDirection().Z());
                 auto dim2world = [&](glm::vec2 p) { return dO + p.x * dX + p.y * dY; };
+                // Fork: curvature comb (Fusion/Alias style). For every spline:
+                // teeth along the normal toward the centre of curvature,
+                // length k * scale, tips joined by an envelope. k comes from
+                // the exact interpolant (Sketch::curvatureComb, with the
+                // Tangent/G2 end conditions), i.e. the curve that is drawn.
+                // Auto scale: the longest tooth over all splines is 60 dp on
+                // screen, times the user's +/- multiplier.
+                if (m_showCurvatureComb) {
+                    const float dp = uiScale();
+                    constexpr int kCombSamplesPerSpan = 16;
+                    constexpr int kToothEvery = 2;     // 8 teeth per span
+                    struct CombScreen {
+                        std::vector<ImVec2> base;  // curve point on screen
+                        std::vector<ImVec2> unit;  // tooth for scale 1 (px)
+                    };
+                    std::vector<CombScreen> combs;
+                    float maxTooth = 0.0f;
+                    for (const auto& sp : m_activeSketch->getSplines()) {
+                        const std::vector<CurvatureCombSample> comb =
+                            m_activeSketch->curvatureComb(sp, kCombSamplesPerSpan);
+                        if (comb.size() < 2) continue;
+                        // Screen step per mm along the normal is measured with
+                        // a small probe relative to the spline's extent.
+                        glm::dvec2 lo = comb.front().point, hi = lo;
+                        for (const auto& c : comb) {
+                            lo = glm::min(lo, c.point);
+                            hi = glm::max(hi, c.point);
+                        }
+                        const double eps = std::max(glm::length(hi - lo) * 1e-3, 1e-6);
+                        CombScreen cs;
+                        cs.base.reserve(comb.size());
+                        cs.unit.reserve(comb.size());
+                        bool ok = true;
+                        for (const auto& c : comb) {
+                            ImVec2 a, b;
+                            const glm::dvec2 q = c.point + c.normal * eps;
+                            if (!toImg(dim2world(glm::vec2(c.point)), a) ||
+                                !toImg(dim2world(glm::vec2(q)), b)) {
+                                ok = false;
+                                break;
+                            }
+                            const float f = static_cast<float>(c.curvature / eps);
+                            const ImVec2 u((b.x - a.x) * f, (b.y - a.y) * f);
+                            maxTooth = std::max(maxTooth, std::sqrt(u.x * u.x + u.y * u.y));
+                            cs.base.push_back(a);
+                            cs.unit.push_back(u);
+                        }
+                        if (ok) combs.push_back(std::move(cs));
+                    }
+                    if (maxTooth > 1e-6f) {
+                        const float scale = 60.0f * dp * m_combScale / maxTooth;
+                        const ImU32 toothCol = IM_COL32(200, 90, 220, 170);
+                        const ImU32 envCol = IM_COL32(225, 110, 245, 235);
+                        const float toothThk = std::max(1.0f, 1.0f * dp);
+                        const float envThk = std::max(1.0f, 1.5f * dp);
+                        std::vector<ImVec2> tips;
+                        for (const CombScreen& cs : combs) {
+                            tips.resize(cs.base.size());
+                            for (size_t i = 0; i < cs.base.size(); ++i)
+                                tips[i] = ImVec2(cs.base[i].x + cs.unit[i].x * scale,
+                                                 cs.base[i].y + cs.unit[i].y * scale);
+                            for (size_t i = 0; i < cs.base.size(); ++i) {
+                                if (i % kToothEvery != 0 && i + 1 != cs.base.size())
+                                    continue;
+                                dl->AddLine(cs.base[i], tips[i], toothCol, toothThk);
+                            }
+                            dl->AddPolyline(tips.data(), static_cast<int>(tips.size()),
+                                            envCol, 0, envThk);
+                        }
+                    }
+                }
                 // Reset the per-frame "click swallowed by a label" flag -
                 // re-evaluated below as labels are drawn and hit-tested.
                 m_dimEditingClickedThisFrame = false;
@@ -7773,6 +7844,27 @@ void Application::renderViewport() {
                             m_splineInsertMode = true; m_splineInsertTarget = target;
                             m_sketchTool->clearElementSelection();   // the spline stops glowing
                         }
+                    }
+                }
+                // Fork: curvature comb toggle (+ scale -/+ while on). Shown
+                // whenever the active sketch has a spline.
+                if (m_activeSketch && !m_activeSketch->getSplines().empty()) {
+                    if (anyBtn) ImGui::SameLine();
+                    anyBtn = true;
+                    const bool combOn = m_showCurvatureComb;
+                    if (combOn) {
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.62f, 0.30f, 0.72f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.40f, 0.82f, 1.0f));
+                    }
+                    if (wideButton("Comb")) m_showCurvatureComb = !m_showCurvatureComb;
+                    if (combOn) ImGui::PopStyleColor(2);
+                    if (combOn) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("-##combScale", ImVec2(btnH, btnH)))
+                            m_combScale = std::max(0.1f, m_combScale / 1.5f);
+                        ImGui::SameLine();
+                        if (ImGui::Button("+##combScale", ImVec2(btnH, btnH)))
+                            m_combScale = std::min(10.0f, m_combScale * 1.5f);
                     }
                 }
                 // ТЗ-21: a tapped constraint icon (Select / Constrain mode)
