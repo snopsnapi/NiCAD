@@ -21,7 +21,7 @@ jobs:
     env:
       # Space-separated test target names; each is an add_executable in
       # tests/CMakeLists.txt. Add new tests as one more word here.
-      TEST_TARGETS: "test_blend_cut test_chamfer_at_limit test_offset_face test_fit_spline"
+      TEST_TARGETS: "test_blend_cut test_chamfer_at_limit test_offset_face test_fit_spline test_sketch_trim_spline test_sketch_offset test_svg_roundtrip"
       CCACHE_DIR: /home/runner/.ccache   # Ubuntu 24.04 default is ~/.cache/ccache
     steps:
       - uses: actions/checkout@v4
