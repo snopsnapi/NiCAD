@@ -898,6 +898,7 @@ void PropertiesPanel::renderSketchConstraintsPanel(int sketchId) {
                 case ConstraintType::Angle:             tn = "Angle";            break;
                 case ConstraintType::DistancePointLine: tn = "Dist\xE2\x8A\xA5"; break;
                 case ConstraintType::CircleGap:         tn = "Gap";              break;
+                case ConstraintType::G2:                tn = "G2";               break;
             }
             std::fprintf(stderr, " %s=%.2f", tn, c.value);
         }

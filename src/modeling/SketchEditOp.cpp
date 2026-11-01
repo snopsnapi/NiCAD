@@ -71,6 +71,7 @@ static const char* constraintName(ConstraintType t) {
         case ConstraintType::Angle:         return "Angle";
         case ConstraintType::DistancePointLine: return "Distance to Line";
         case ConstraintType::CircleGap: return "Circle Gap";
+        case ConstraintType::G2: return "G2";
     }
     return "Constraint";
 }

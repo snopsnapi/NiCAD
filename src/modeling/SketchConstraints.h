@@ -18,7 +18,8 @@ enum class ConstraintType {
     Concentric,    // two circles/arcs share same center
     Angle,         // fixed angle (radians) between two lines
     DistancePointLine, // fixed perpendicular distance from a point to a line's infinite carrier
-    CircleGap          // fixed rim-to-rim gap between two circles/arcs (centre dist - rA - rB)
+    CircleGap,         // fixed rim-to-rim gap between two circles/arcs (centre dist - rA - rB)
+    G2                 // fork: spline end curvature-continuous with another curve (entityA = spline)
 };
 
 struct Constraint {

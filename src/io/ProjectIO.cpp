@@ -777,7 +777,7 @@ void parseSketchBodyImpl(std::istream& ifs, materializr::Sketch& sk,
                 // have no default arm to absorb it. Drop the constraint
                 // rather than carry a garbage type into the solver.
                 if (tval < static_cast<int>(ConstraintType::Coincident) ||
-                    tval > static_cast<int>(ConstraintType::CircleGap))
+                    tval > static_cast<int>(ConstraintType::G2))
                     continue;
                 c.type = static_cast<ConstraintType>(tval);
                 // Label offsets are trailing optional fields (since the
