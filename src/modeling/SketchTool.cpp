@@ -47,6 +47,7 @@ void SketchTool::setMode(SketchToolMode mode) {
     m_chainStartPointId = -1;
     m_isDragging = false;
     m_dragPointId = -1;
+    m_dragSnapTargetId = -1;
     m_splinePoints.clear();
     m_activeSplineId = -1; // a partial spline stays committed (>=2 points)
     m_stampStack.clear(); // stamp-undo history is per tool session
@@ -278,13 +279,14 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
                 if (sp.id == sid) { for (int cp : sp.controlPointIds) pts.insert(cp); break; }
         if (pts.empty() && m_dragPointId >= 0) pts.insert(m_dragPointId);
 
-        // When a single point is being dragged, run inference snap on its
-        // target position so endpoint / midpoint / on-line / axis-from-point
-        // guides fire mid-drag (the same as during placement). The dragged
-        // point itself is excluded so it doesn't snap to its starting spot.
-        // For multi-point drags we skip inference snap - there's no single
-        // "cursor follows this point" semantic, and snapping one would slide
-        // the others off.
+        // When a single point is being dragged, run inference on its target
+        // position so guides fire mid-drag (the same as during placement).
+        // Desktop runs the full snap() set (endpoint / midpoint / on-line /
+        // axis-from-point); touch keeps only the other-POINTS magnet (below).
+        // The dragged point itself is excluded so it doesn't snap to its
+        // starting spot. For multi-point drags we skip inference entirely -
+        // there's no single "cursor follows this point" semantic, and snapping
+        // one would slide the others off.
         if (pts.size() == 1 && m_dragPointId >= 0) {
             const SketchPoint* p = m_sketch->getPoint(m_dragPointId);
             // `delta` is between SNAPPED cursor positions, so it is zero for any
@@ -295,9 +297,40 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
             if (p && delta != glm::vec2(0.0f)) {
                 m_snapExcludePoints = pts;
                 glm::vec2 target = p->pos + delta;
+                m_dragSnapTargetId = -1;
                 // Fork, touch: a dragged point follows the finger - no
-                // axis / on-line magnets (they fought the finger on the tablet).
-                glm::vec2 inferred = touchMode() ? target : snap(target);
+                // axis / on-line magnets (they fought the finger on the
+                // tablet). The ONE magnet worth keeping is other sketch
+                // POINTS: hover the dragged end inside the 24 dp catch of
+                // another vertex and it sticks there, showing the Endpoint
+                // marker - releasing then welds the two (Sketch::mergePoints),
+                // which is how a spline end closes onto its own start.
+                // Desktop keeps the full inference snap.
+                glm::vec2 inferred;
+                if (touchMode()) {
+                    constexpr float kPointCatchDp = 24.0f;
+                    const float radius = kPointCatchDp * uiScale() * m_mmPerPixel;
+                    int best = -1;
+                    float bestDist = radius;
+                    for (const auto& pt : m_sketch->getPoints()) {
+                        if (pt.id == m_dragPointId || pt.fromText) continue;
+                        const float d = glm::length(target - pt.pos);
+                        if (d < bestDist) { bestDist = d; best = pt.id; }
+                    }
+                    if (best >= 0) {
+                        const SketchPoint* tp = m_sketch->getPoint(best);
+                        inferred = tp->pos;
+                        m_dragSnapTargetId = best;
+                        // Same Endpoint guide snap() emits for a landed point,
+                        // so the overlay marks the weld target mid-drag.
+                        m_activeInferences.push_back(
+                            {InferenceGuide::Endpoint, tp->pos, tp->pos, best});
+                    } else {
+                        inferred = target;
+                    }
+                } else {
+                    inferred = snap(target);
+                }
                 m_snapExcludePoints.clear();
                 // A point already stuck to a rim rides it; snap()'s answer only
                 // applies once the attachment has been let go.
@@ -342,11 +375,44 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
 
 void SketchTool::onMouseUp(glm::vec2 /*pos*/) {
     if (m_isDragging) {
+        // Fork, touch: releasing a dragged point that was magnet-snapped onto
+        // another sketch point welds the two. Undo flows through the host's
+        // before/after drag snapshot, which sees the point count drop.
+        const int mergeFrom = m_dragSnapTargetId >= 0 ? m_dragPointId : -1;
+        const int mergeInto = m_dragSnapTargetId;
         m_isDragging = false;
         m_dragPointId = -1;
+        m_dragSnapTargetId = -1;
         // No more drag - clear any drag-time inference guides so the overlay
         // doesn't linger after the user releases the mouse.
         m_activeInferences.clear();
+        if (mergeFrom >= 0 && m_sketch &&
+            m_sketch->mergePoints(mergeFrom, mergeInto)) {
+            m_selectedPoints.erase(mergeFrom);
+            // If the welded point belonged to the spline still being placed,
+            // keep the in-progress control list in sync. A weld that closed
+            // the spline (its end dragged onto its own start) - or deleted
+            // it as degenerate - finishes placement, the same reset the
+            // close-tap performs.
+            if (m_activeSplineId >= 0 && !m_splinePoints.empty()) {
+                bool closed = false, exists = false;
+                for (const auto& sp : m_sketch->getSplines())
+                    if (sp.id == m_activeSplineId) {
+                        exists = true;
+                        closed = sp.controlPointIds.size() > 2 &&
+                                 sp.controlPointIds.front() == sp.controlPointIds.back();
+                    }
+                if (!exists || closed) {
+                    m_splinePoints.clear();
+                    m_activeSplineId = -1;
+                    m_isPlacing = false;
+                    m_clickCount = 0;
+                } else {
+                    for (int& pid : m_splinePoints)
+                        if (pid == mergeFrom) pid = mergeInto;
+                }
+            }
+        }
     }
 }
 
