@@ -2653,6 +2653,18 @@ void Application::handleToolAction(int action) {
             applySketchConstraint(ConstraintType::Tangent); break;
         case ToolAction::SketchConstrainConcentric:
             applySketchConstraint(ConstraintType::Concentric); break;
+        case ToolAction::SketchConstrainMenu:
+            // ТЗ-21: the touch rail's Constraints button toggles - a repeat
+            // tap while the Constrain mode is on leaves it (Fusion's reflex:
+            // tap the lit tool again to put it down).
+            if (m_inSketchMode && materializr::touchMode()) {
+                if (m_sketchTool &&
+                    m_sketchTool->getMode() == SketchToolMode::Constrain)
+                    m_sketchTool->setMode(SketchToolMode::Select);
+                else
+                    m_sketchConstraintsMenuPending = true;
+            }
+            break;
 
         // --- Sketch element transforms (operate on the Select-mode selection) ---
         // Rotate is handled by the sketch gizmo's ring handle (see Application_
@@ -3577,6 +3589,18 @@ void Application::handleShortcuts() {
                 m_dimPopupConsumedEsc = false;
             } else if (m_sketchTool && m_sketchTool->getMode() == SketchToolMode::Dimension) {
                 m_sketchTool->onCancel();
+            } else if (m_sketchTool && m_sketchTool->getMode() == SketchToolMode::Constrain) {
+                // ТЗ-21: first Esc drops a pending first pick, second leaves the
+                // Constrain mode for Select - never straight out of the sketch
+                // (Constrain never reports isPlacing(), so without this branch
+                // Escape would exitSketchMode() from under the user).
+                if (m_constrainHasFirst) {
+                    m_constrainHasFirst = false;
+                    m_constrainFirstId = -1;
+                    m_sketchTool->clearElementSelection();
+                } else {
+                    m_sketchTool->setMode(SketchToolMode::Select);
+                }
             } else if (m_sketchTool && m_sketchTool->getMode() == SketchToolMode::Spline &&
                        m_sketchTool->splinePointsInProgress().size() >= 2) {
                 // A line chain keeps the segments already laid down and drops only
@@ -6729,6 +6753,203 @@ void Application::applySketchConstraint(ConstraintType type) {
     if (added > 0) markDirty();
 }
 
+// ─── ТЗ-21: Fusion-style two-tap constraint placement (touch) ───────────────
+
+void Application::activateConstrainTool(ConstraintType type) {
+    if (!m_inSketchMode || !m_sketchTool) return;
+    // Repeat pick of the active type leaves the mode (same toggle reflex as
+    // the rail button).
+    if (m_sketchTool->getMode() == SketchToolMode::Constrain &&
+        m_constrainType == type) {
+        m_sketchTool->setMode(SketchToolMode::Select);
+        return;
+    }
+    m_constrainType = type;
+    m_constrainHasFirst = false;
+    m_constrainFirstId = -1;
+    m_selectedConstraintId = -1;
+    m_sketchTool->setMode(SketchToolMode::Constrain);
+}
+
+void Application::addSketchConstraints(std::vector<Constraint> list) {
+    if (!m_inSketchMode || !m_activeSketch || !m_sketchSolver) return;
+    bool added = false;
+    recordSketchMutation([&]{
+        for (auto& c : list) {
+            c.id = 0;             // sketch assigns
+            c.isSatisfied = false;
+            m_activeSketch->addConstraint(c);
+            added = true;
+        }
+        if (added) {
+            m_sketchSolver->setSketch(m_activeSketch.get());
+            m_sketchSolver->solve(*m_activeSketch);
+        }
+    });
+    if (added) markDirty();
+}
+
+void Application::addSketchConstraintPair(ConstraintType t, int a, int b) {
+    if (!m_inSketchMode || !m_activeSketch || a < 0) return;
+    Constraint c;
+    c.type = t;
+    c.entityA = a;
+    c.entityB = b;
+    if (t == ConstraintType::Fixed) {
+        // Pin the point at its CURRENT position, like applySketchConstraint.
+        const SketchPoint* p = m_activeSketch->getPoint(a);
+        if (!p) return;
+        c.value = static_cast<double>(p->pos.x);
+        c.valueY = static_cast<double>(p->pos.y);
+    }
+    addSketchConstraints({c});
+}
+
+void Application::constrainTapPick(int pointId, int lineId, int curveId) {
+    if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) return;
+    if (m_sketchTool->getMode() != SketchToolMode::Constrain) return;
+    const int id = pointId >= 0 ? pointId
+                 : lineId  >= 0 ? lineId
+                 : curveId;
+    if (id < 0) return; // empty tap: keep the pending first pick, Fusion-style
+
+    // Element ids are unique across types (one counter), so the kind is
+    // whichever container holds the id.
+    int kind = -1;
+    if (m_activeSketch->getPoint(id))
+        kind = static_cast<int>(SketchElementType::Point);
+    else {
+        for (const auto& l : m_activeSketch->getLines())
+            if (l.id == id) { kind = static_cast<int>(SketchElementType::Line); break; }
+        if (kind < 0)
+            for (const auto& cc : m_activeSketch->getCircles())
+                if (cc.id == id) { kind = static_cast<int>(SketchElementType::Circle); break; }
+        if (kind < 0)
+            for (const auto& aa : m_activeSketch->getArcs())
+                if (aa.id == id) { kind = static_cast<int>(SketchElementType::Arc); break; }
+        if (kind < 0)
+            for (const auto& sp : m_activeSketch->getSplines())
+                if (sp.id == id) { kind = static_cast<int>(SketchElementType::Spline); break; }
+    }
+    if (kind < 0) return;
+
+    auto highlight = [&](int k, int eid) {
+        std::set<int> ps, ls, cs, as, ss;
+        if (k == static_cast<int>(SketchElementType::Point))       ps.insert(eid);
+        else if (k == static_cast<int>(SketchElementType::Line))   ls.insert(eid);
+        else if (k == static_cast<int>(SketchElementType::Circle)) cs.insert(eid);
+        else if (k == static_cast<int>(SketchElementType::Arc))    as.insert(eid);
+        else if (k == static_cast<int>(SketchElementType::Spline)) ss.insert(eid);
+        m_sketchTool->setSelectionFull(ps, ls, cs, as, ss);
+    };
+
+    // Fix applies off the single tap: pin everything the element's shape is
+    // driven by (its points), as ONE undo step.
+    if (m_constrainType == ConstraintType::Fixed) {
+        std::vector<int> pinPts;
+        auto pinPoint = [&](int pid) {
+            if (m_activeSketch->getPoint(pid)) pinPts.push_back(pid);
+        };
+        if (kind == static_cast<int>(SketchElementType::Point)) {
+            pinPoint(id);
+        } else if (kind == static_cast<int>(SketchElementType::Line)) {
+            for (const auto& l : m_activeSketch->getLines())
+                if (l.id == id) { pinPoint(l.startPointId); pinPoint(l.endPointId); break; }
+        } else if (kind == static_cast<int>(SketchElementType::Circle)) {
+            for (const auto& cc : m_activeSketch->getCircles())
+                if (cc.id == id) { pinPoint(cc.centerPointId); break; }
+        } else if (kind == static_cast<int>(SketchElementType::Arc)) {
+            for (const auto& aa : m_activeSketch->getArcs())
+                if (aa.id == id) {
+                    pinPoint(aa.centerPointId);
+                    pinPoint(aa.startPointId);
+                    pinPoint(aa.endPointId);
+                    break;
+                }
+        } else if (kind == static_cast<int>(SketchElementType::Spline)) {
+            for (const auto& sp : m_activeSketch->getSplines())
+                if (sp.id == id) {
+                    for (int pid : sp.controlPointIds) pinPoint(pid);
+                    break;
+                }
+        }
+        std::vector<Constraint> cs;
+        for (int pid : pinPts) {
+            const SketchPoint* p = m_activeSketch->getPoint(pid);
+            Constraint c;
+            c.type = ConstraintType::Fixed;
+            c.entityA = pid;
+            c.value = static_cast<double>(p->pos.x);
+            c.valueY = static_cast<double>(p->pos.y);
+            cs.push_back(c);
+        }
+        if (!cs.empty()) addSketchConstraints(std::move(cs));
+        return;
+    }
+
+    // Pair tools: first tap arms, second tap validates + applies, then re-arms
+    // for the next constraint (the mode stays on, Fusion-style).
+    if (!m_constrainHasFirst) {
+        m_constrainFirstId = id;
+        m_constrainFirstKind = kind;
+        m_constrainHasFirst = true;
+        highlight(kind, id);
+        return;
+    }
+
+    const int ka = m_constrainFirstKind, kb = kind;
+    const int ia = m_constrainFirstId,  ib = id;
+    int outA = -1, outB = -1;
+    bool ok = ia != ib;
+    if (ok) {
+        using CT = ConstraintType;
+        const bool aLn = ka == static_cast<int>(SketchElementType::Line);
+        const bool aSp = ka == static_cast<int>(SketchElementType::Spline);
+        const bool aCv = ka == static_cast<int>(SketchElementType::Circle) ||
+                         ka == static_cast<int>(SketchElementType::Arc);
+        const bool bLn = kb == static_cast<int>(SketchElementType::Line);
+        const bool bSp = kb == static_cast<int>(SketchElementType::Spline);
+        const bool bCv = kb == static_cast<int>(SketchElementType::Circle) ||
+                         kb == static_cast<int>(SketchElementType::Arc);
+        switch (m_constrainType) {
+            case CT::Parallel:
+            case CT::Perpendicular:
+                ok = aLn && bLn;
+                if (ok) { outA = ia; outB = ib; }
+                break;
+            case CT::Tangent:
+                // line + circle/arc (curve is entityA, as applySketchConstraint
+                // has always done), or spline + line/curve/spline (spline is
+                // entityA; first-tapped spline wins when both are splines).
+                if (aSp)      { ok = bLn || bCv || bSp; outA = ia; outB = ib; }
+                else if (bSp) { ok = aLn || aCv;         outA = ib; outB = ia; }
+                else          { ok = (aCv && bLn);       outA = ia; outB = ib; }
+                break;
+            case CT::G2:
+                // Spline end curvature-continuous with another curve: the
+                // spline is entityA (first-tapped when both are splines).
+                if (aSp)      { ok = bLn || bCv || bSp; outA = ia; outB = ib; }
+                else if (bSp) { ok = aLn || aCv;        outA = ib; outB = ia; }
+                else ok = false;
+                break;
+            default:
+                ok = false;
+                break;
+        }
+    }
+    if (!ok) {
+        showToast(materializr::tr("Those elements can't take this constraint"),
+                  2.5);
+        // Keep the first pick armed; restore its highlight.
+        highlight(ka, ia);
+        return;
+    }
+    addSketchConstraintPair(m_constrainType, outA, outB);
+    m_constrainHasFirst = false;
+    m_constrainFirstId = -1;
+    m_sketchTool->clearElementSelection();
+}
+
 void Application::applyPendingDimension() {
     if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) return;
     // Value copy: clearDimState() below resets the tool's live m_dimPending
@@ -8563,6 +8784,22 @@ void Application::run() {
             // use (Line vs Circle vs etc.) when in sketch mode.
             m_toolbar->setActiveSketchMode(m_inSketchMode && m_sketchTool
                 ? static_cast<int>(m_sketchTool->getMode()) : 0);
+            // ТЗ-21: mirror the active two-tap constraint tool so the rail's
+            // Constraints button shows the selected type and its highlight;
+            // drop stale Constrain/icon-selection state whenever the mode or
+            // the sketch itself is gone (e.g. the tool was switched from the
+            // rail, or the sketch was finished).
+            m_toolbar->setConstrainType(
+                m_inSketchMode && m_sketchTool &&
+                        m_sketchTool->getMode() == SketchToolMode::Constrain
+                    ? static_cast<int>(m_constrainType)
+                    : -1);
+            if (!m_inSketchMode || !m_sketchTool ||
+                m_sketchTool->getMode() != SketchToolMode::Constrain) {
+                m_constrainHasFirst = false;
+                m_constrainFirstId = -1;
+            }
+            if (!m_inSketchMode) m_selectedConstraintId = -1;
             // Drive the Constraints section: it only appears when sketch
             // elements are actually selected, and only shows buttons that
             // match the selection arity.

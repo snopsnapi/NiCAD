@@ -49,7 +49,11 @@ enum class ToolAction {
     // Sketch Fill tool: mark closed regions solid for SVG export (engraving).
     // Appended rather than grouped with the sketch tools above so no existing
     // value shifts.
-    SketchFill
+    SketchFill,
+    // Fusion-style Constraints menu (ТЗ-21, touch only): opens the popup with
+    // the two-tap constraint tools (Tangent / Parallel / Perpendicular / Fix /
+    // G2). Activates SketchToolMode::Constrain.
+    SketchConstrainMenu
 };
 
 class Toolbar {
@@ -139,10 +143,15 @@ public:
 
     // Active SketchToolMode (int - Toolbar avoids depending on SketchTool.h).
     // Matches SketchToolMode enum: 0=None, 1=Select, 2=Line, 3=Circle,
-    // 4=Rectangle, 5=Arc, 6=Spline, 7=Polygon, 8=Trim, 14=Offset. Used to draw a
-    // highlight border around the matching button so the active tool is
-    // unambiguous at a glance.
+    // 4=Rectangle, 5=Arc, 6=Spline, 7=Polygon, 8=Trim, 14=Offset, 20=Constrain
+    // (fork, ТЗ-21). Used to draw a highlight border around the matching button
+    // so the active tool is unambiguous at a glance.
     void setActiveSketchMode(int mode) { m_activeSketchMode = mode; }
+
+    // ТЗ-21: active two-tap constraint tool (ConstraintType as int, -1 = the
+    // Constrain mode is not active). The sketch rail's Constraints button
+    // shows the selected type's name and lights up while the mode is on.
+    void setConstrainType(int t) { m_constrainType = t; }
 
     // Current sketch-element selection counts. Application updates these each
     // frame from SketchTool so the Constraints section of the sketch toolbar
@@ -205,6 +214,7 @@ private:
     bool m_selSketchAttached = false; // selected sketch still drives a body (see setter)
     bool m_showTooltips = true;
     int  m_activeSketchMode = 0; // SketchToolMode (see setActiveSketchMode)
+    int  m_constrainType = -1;   // ТЗ-21: active Constrain tool, -1 = off (see setConstrainType)
     int  m_selPoints = 0;        // sketch points currently selected (see setSketchSelectionCounts)
     int  m_selLines = 0;         // sketch lines currently selected
     int  m_selCircles = 0;       // sketch circles currently selected

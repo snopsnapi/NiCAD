@@ -17,7 +17,12 @@ namespace materializr {
 // (Application::setActiveSketchMode) and the sketch toolbar hardcodes those
 // indices, so inserting a mode in the middle silently highlights the wrong
 // button -- Dimension would become 13 while the button still tests 12.
-enum class SketchToolMode { None, Select, Line, Circle, Rectangle, Arc, Spline, Polygon, Trim, Text, Svg, Mirror, Dimension, Airfoil, Offset, Point, Fill };
+enum class SketchToolMode { None, Select, Line, Circle, Rectangle, Arc, Spline, Polygon, Trim, Text, Svg, Mirror, Dimension, Airfoil, Offset, Point, Fill,
+    // Fork (ТЗ-21): Fusion-style two-tap constraint placement. Not a drawing
+    // tool - the app intercepts taps before SketchTool::onMouseDown (same
+    // arrangement as Dimension). Explicit 20 keeps a gap after Fill so a
+    // future upstream mode can't silently shift it.
+    Constrain = 20 };
 
 enum class DimEntityKind { None, Point, Line, Circle, Arc };
 struct DimPick { DimEntityKind kind = DimEntityKind::None; int id = -1; };

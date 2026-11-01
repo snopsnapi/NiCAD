@@ -212,6 +212,25 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
         add(MZ_ICON_MEASURE, "Dimension", ToolAction::SketchDimension,
             m_activeSketchMode == 12,
             "Dimension: tap entities, tap to place the label, type the value.");
+        // ТЗ-21: Fusion-style Constraints menu (touch only; desktop keeps its
+        // right-click Add Constraint menu). Tap opens the popup with the
+        // two-tap constraint tools; while the Constrain mode is on the button
+        // wears the selected type's name and the highlight border.
+        if (materializr::touchMode()) {
+            const bool cActive = m_activeSketchMode == 20; // SketchToolMode::Constrain
+            const char* cLabel = "Constraints";
+            switch (m_constrainType) {
+                case 8:  cLabel = "Tangent"; break;
+                case 5:  cLabel = "Parallel"; break;
+                case 6:  cLabel = "Perpendicular"; break;
+                case 7:  cLabel = "Fix"; break;
+                case 14: cLabel = "G2"; break;
+                default: break;
+            }
+            add(MZ_ICON_LOCK, cLabel, ToolAction::SketchConstrainMenu, cActive,
+                "Constraints: tap one element, then another - Tangent, Parallel, "
+                "Perpendicular, Fix or G2. Tap again to stop.");
+        }
         // Sketch-element transforms - mirror the classic sketch toolbar so all
         // three layouts behave identically. Like classic, they're always here
         // in a sketch and simply no-op if nothing is selected. (The rail

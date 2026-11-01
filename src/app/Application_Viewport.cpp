@@ -3052,6 +3052,9 @@ void Application::renderViewport() {
                 // Reset the per-frame "click swallowed by a label" flag -
                 // re-evaluated below as labels are drawn and hit-tested.
                 m_dimEditingClickedThisFrame = false;
+                // ТЗ-21: same per-frame reset for a click swallowed by a
+                // constraint icon (drawn below, hit-tested like the labels).
+                m_constraintIconClickedThisFrame = false;
                 // The Dimension tool's commit path (applyPendingDimension, in
                 // Application.cpp) sets m_dimEditingId + this flag from outside
                 // any ImGui window scope. OpenPopup only takes effect when
@@ -3430,6 +3433,244 @@ void Application::renderViewport() {
                         glm::vec2 anchor = dimensionAutoAnchor(pd);
                         std::snprintf(lbl, sizeof(lbl), "%s", materializr::fmtLength(c.value).c_str());
                         placeLabel(anchor, glm::vec2(0.0f), lbl, c, &anchor);
+                    }
+                }
+
+                // ── ТЗ-21 (touch): constraint icons on the geometry ──────
+                // Tappable 22 dp plates marking each geometric constraint at
+                // its entity - the touch replacement for the desktop GL
+                // glyphs, which SketchRenderer skips under touchMode(). A
+                // tap selects the constraint (accent border; the bottom
+                // bar's Delete removes it). Dimension-bearing types keep
+                // their own labels and get no icon here.
+                if (materializr::touchMode()) {
+                    const float dp = uiScale();
+                    const float plate = 22.0f * dp;
+                    const float half = plate * 0.5f;
+                    const float pad = 3.0f * dp;   // glyph inset inside the plate
+                    const float anchorOff = 16.0f * dp;
+                    const float rowStep = 24.0f * dp;
+                    const float tapR = 16.0f * dp;
+                    const float glyphThk = std::max(1.0f, 1.4f * dp);
+                    const ImU32 plateBg = IM_COL32(26, 28, 38, 242);
+                    const ImU32 plateEdge = IM_COL32(80, 86, 100, 255);
+                    const ImU32 glyphCol = IM_COL32(238, 243, 252, 255);
+                    const ImU32 badCol = IM_COL32(240, 74, 74, 255);
+                    const ImU32 selCol =
+                        ImGui::ColorConvertFloat4ToU32(materializr::accentText());
+                    const ImVec2 mouse = ImGui::GetMousePos();
+                    const bool iconTapsActive =
+                        m_sketchTool &&
+                        (m_sketchTool->getMode() == SketchToolMode::Select ||
+                         m_sketchTool->getMode() == SketchToolMode::Constrain);
+
+                    // Sketch-space anchor for an entity: the point itself, a
+                    // line's midpoint, a point on the circle/arc rim, a
+                    // spline's end control point.
+                    auto entityAnchor = [&](int eid, glm::vec2& out) -> bool {
+                        if (const SketchPoint* p = m_activeSketch->getPoint(eid)) {
+                            out = p->pos;
+                            return true;
+                        }
+                        for (const auto& l : m_activeSketch->getLines())
+                            if (l.id == eid) {
+                                const SketchPoint* a = m_activeSketch->getPoint(l.startPointId);
+                                const SketchPoint* b = m_activeSketch->getPoint(l.endPointId);
+                                if (a && b) { out = 0.5f * (a->pos + b->pos); return true; }
+                                return false;
+                            }
+                        for (const auto& cc : m_activeSketch->getCircles())
+                            if (cc.id == eid) {
+                                const SketchPoint* cp = m_activeSketch->getPoint(cc.centerPointId);
+                                if (!cp) return false;
+                                out = cp->pos + glm::vec2(0.7071f, 0.7071f) *
+                                                static_cast<float>(cc.radius);
+                                return true;
+                            }
+                        for (const auto& aa : m_activeSketch->getArcs())
+                            if (aa.id == eid) {
+                                const SketchPoint* cp = m_activeSketch->getPoint(aa.centerPointId);
+                                const SketchPoint* sp = m_activeSketch->getPoint(aa.startPointId);
+                                const SketchPoint* ep = m_activeSketch->getPoint(aa.endPointId);
+                                if (!cp || !sp || !ep) return false;
+                                // The arc's own midpoint: centre -> through
+                                // the chord midpoint, out to the radius.
+                                glm::vec2 m = 0.5f * (sp->pos + ep->pos) - cp->pos;
+                                if (glm::dot(m, m) < 1e-8f)
+                                    m = glm::vec2(0.7071f, 0.7071f);
+                                out = cp->pos + glm::normalize(m) *
+                                                static_cast<float>(aa.radius);
+                                return true;
+                            }
+                        for (const auto& sp : m_activeSketch->getSplines())
+                            if (sp.id == eid) {
+                                if (sp.controlPointIds.empty()) return false;
+                                const SketchPoint* p =
+                                    m_activeSketch->getPoint(sp.controlPointIds.back());
+                                if (!p) return false;
+                                out = p->pos;
+                                return true;
+                            }
+                        return false;
+                    };
+
+                    std::vector<ImVec2> placed;  // icon centres, for the row nudge
+
+                    auto textGlyph = [&](const char* txt, ImVec2 ctr) {
+                        ImVec2 ts = ImGui::CalcTextSize(txt);
+                        dl->AddText(ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f),
+                                    glyphCol, txt);
+                    };
+
+                    // The constraint's glyph, centred in its plate.
+                    auto drawGlyph = [&](const Constraint& c, ImVec2 ctr) {
+                        const float r = half - pad;
+                        switch (c.type) {
+                            case ConstraintType::Horizontal:
+                                textGlyph("H", ctr);
+                                break;
+                            case ConstraintType::Vertical:
+                                textGlyph("V", ctr);
+                                break;
+                            case ConstraintType::G2:
+                                textGlyph("G2", ctr);
+                                break;
+                            case ConstraintType::Equal:
+                                textGlyph("=", ctr);
+                                break;
+                            case ConstraintType::Parallel: {
+                                const float g = r * 0.5f;
+                                dl->AddLine(ImVec2(ctr.x - g * 0.4f, ctr.y - g),
+                                            ImVec2(ctr.x - g * 0.4f, ctr.y + g),
+                                            glyphCol, glyphThk);
+                                dl->AddLine(ImVec2(ctr.x + g * 0.4f, ctr.y - g),
+                                            ImVec2(ctr.x + g * 0.4f, ctr.y + g),
+                                            glyphCol, glyphThk);
+                                break;
+                            }
+                            case ConstraintType::Perpendicular: {
+                                const float g = r * 0.7f;
+                                dl->AddLine(ImVec2(ctr.x - g, ctr.y + g * 0.6f),
+                                            ImVec2(ctr.x + g, ctr.y + g * 0.6f),
+                                            glyphCol, glyphThk);
+                                dl->AddLine(ImVec2(ctr.x, ctr.y + g * 0.6f),
+                                            ImVec2(ctr.x, ctr.y - g),
+                                            glyphCol, glyphThk);
+                                break;
+                            }
+                            case ConstraintType::Coincident: {
+                                const float g = r * 0.6f;
+                                dl->AddRect(ImVec2(ctr.x - g, ctr.y - g),
+                                            ImVec2(ctr.x + g, ctr.y + g),
+                                            glyphCol, 0.0f, glyphThk);
+                                break;
+                            }
+                            case ConstraintType::Concentric:
+                                dl->AddCircle(ctr, r * 0.72f, glyphCol, 0, glyphThk);
+                                dl->AddCircle(ctr, r * 0.36f, glyphCol, 0, glyphThk);
+                                break;
+                            case ConstraintType::Fixed: {
+                                // Padlock: body rectangle + shackle arc.
+                                const float w = r * 0.8f, h = r * 0.55f;
+                                const float top = ctr.y + h * 0.5f;
+                                dl->AddRect(ImVec2(ctr.x - w, top - h),
+                                            ImVec2(ctr.x + w, top),
+                                            glyphCol, 1.5f * dp, glyphThk);
+                                dl->PathArcTo(ImVec2(ctr.x, top - h), w * 0.55f,
+                                              3.14159265f, 6.2831853f, 12);
+                                dl->PathStroke(glyphCol, glyphThk);
+                                break;
+                            }
+                            case ConstraintType::Tangent: {
+                                const float cr = r * 0.5f;
+                                const ImVec2 cc(ctr.x - r * 0.2f, ctr.y + r * 0.15f);
+                                dl->AddCircle(cc, cr, glyphCol, 0, glyphThk);
+                                // A line grazing the circle's upper right.
+                                dl->AddLine(ImVec2(ctr.x + cr * 0.45f, ctr.y - r * 0.9f),
+                                            ImVec2(ctr.x + r * 1.0f, ctr.y + cr * 0.85f),
+                                            glyphCol, glyphThk);
+                                break;
+                            }
+                            default:
+                                break;
+                        }
+                    };
+
+                    for (const auto& c : m_activeSketch->getConstraints()) {
+                        // Dimension-bearing types have their own labels.
+                        if (c.type == ConstraintType::Distance ||
+                            c.type == ConstraintType::Radius ||
+                            c.type == ConstraintType::Angle ||
+                            c.type == ConstraintType::DistancePointLine ||
+                            c.type == ConstraintType::CircleGap)
+                            continue;
+                        // Entities the icon anchors to (one per end for the
+                        // two-entity types).
+                        int ents[2] = { c.entityA, -1 };
+                        int nEnts = 1;
+                        switch (c.type) {
+                            case ConstraintType::Coincident:
+                            case ConstraintType::Parallel:
+                            case ConstraintType::Perpendicular:
+                            case ConstraintType::Equal:
+                            case ConstraintType::Concentric:
+                            case ConstraintType::Tangent:
+                            case ConstraintType::G2:
+                                if (c.entityB >= 0) ents[1] = c.entityB;
+                                break;
+                            default:
+                                break; // single-entity types: H/V/Fixed
+                        }
+                        if (ents[1] >= 0) nEnts = 2;
+                        for (int i = 0; i < nEnts; ++i) {
+                            glm::vec2 sa;
+                            ImVec2 sp;
+                            if (!entityAnchor(ents[i], sa)) continue;
+                            if (!toImg(dim2world(sa), sp)) continue;
+                            // Float 16 dp up-right of the entity; icons
+                            // sharing an anchor walk right in a 24 dp row.
+                            ImVec2 ctr(sp.x + anchorOff, sp.y - anchorOff);
+                            for (int guard = 0; guard < 8; ++guard) {
+                                bool clash = false;
+                                for (const ImVec2& q : placed) {
+                                    if (std::fabs(q.x - ctr.x) < rowStep &&
+                                        std::fabs(q.y - ctr.y) < plate) {
+                                        clash = true;
+                                        break;
+                                    }
+                                }
+                                if (!clash) break;
+                                ctr.x += rowStep;
+                            }
+                            placed.push_back(ctr);
+
+                            const bool selected = (c.id == m_selectedConstraintId);
+                            ImVec2 mn(ctr.x - half, ctr.y - half);
+                            ImVec2 mx(ctr.x + half, ctr.y + half);
+                            dl->AddRectFilled(mn, mx, plateBg, 4.0f * dp);
+                            drawGlyph(c, ctr);
+                            if (!c.isSatisfied)
+                                dl->AddRect(mn, mx, badCol, 4.0f * dp, 1.6f * dp);
+                            else if (selected)
+                                dl->AddRect(mn, mx, selCol, 4.0f * dp, 2.0f * dp);
+                            else
+                                dl->AddRect(mn, mx, plateEdge, 4.0f * dp, 1.0f);
+
+                            // Tap selects the constraint. Priority over the
+                            // geometry pick: the flag set here makes the
+                            // input routing below swallow this same click.
+                            if (iconTapsActive) {
+                                const float dx = mouse.x - ctr.x;
+                                const float dy = mouse.y - ctr.y;
+                                if (dx * dx + dy * dy <= tapR * tapR &&
+                                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                    m_selectedConstraintId = c.id;
+                                    m_sketchTool->clearElementSelection();
+                                    m_constrainHasFirst = false;
+                                    m_constraintIconClickedThisFrame = true;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -6832,7 +7073,8 @@ void Application::renderViewport() {
                     // Suppress normal sketch input while the gizmo owns the drag /
                     // popup adjust.
                 } else if (m_sketchTool->getMode() == SketchToolMode::Select &&
-                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    !m_constraintIconClickedThisFrame) {
                     // Double-click behaviour:
                     //   on a line → select every line in its connected chain
                     //               (lines sharing endpoints, transitively),
@@ -6895,7 +7137,8 @@ void Application::renderViewport() {
                 } else if (m_splineInsertMode &&
                            m_sketchTool->getMode() == SketchToolMode::Select &&
                            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                           !m_dimEditingClickedThisFrame && !m_moveModeToggle) {
+                           !m_dimEditingClickedThisFrame && !m_moveModeToggle &&
+                           !m_constraintIconClickedThisFrame) {
                     // Fork: Add-point mode - a tap ON the target spline inserts a
                     // control point there; anywhere else does nothing.
                     float tol = 0.5f;
@@ -6906,13 +7149,32 @@ void Application::renderViewport() {
                     recordSketchMutation([&]{
                         m_sketchTool->insertSplinePointAt(target, sketchCoord, tol); });
                     m_sketchDragBefore.reset();
+                } else if (m_sketchTool->getMode() == SketchToolMode::Constrain &&
+                           ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                           !m_dimEditingClickedThisFrame && !m_moveModeToggle &&
+                           !m_constraintIconClickedThisFrame) {
+                    // ТЗ-21: two-tap constraint placement. The pick priority
+                    // is constraint icons (handled where they are drawn,
+                    // above) - a tap that missed them drops the icon
+                    // selection and feeds the Constrain pick.
+                    m_selectedConstraintId = -1;
+                    int hitPt = -1, hitLn = -1, hitCv = -1;
+                    pickSketchAt(sketchCoord, hitPt, hitLn, hitCv);
+                    constrainTapPick(hitPt, hitLn, hitCv);
+                    m_sketchDragBefore.reset(); // not a drag
                 } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                           !m_dimEditingClickedThisFrame && !m_moveModeToggle) {
+                           !m_dimEditingClickedThisFrame && !m_moveModeToggle &&
+                           !m_constraintIconClickedThisFrame) {
                     // m_dimEditingClickedThisFrame is set when a click landed
                     // on a dimension-label hit-rect this frame; swallow the
                     // click here so it doesn't ALSO place a sketch point at
                     // that screen position underneath the popup.
                     // Pick first to decide between element-drag and box-select.
+                    // ТЗ-21: a tap anywhere but on a constraint icon also drops
+                    // the icon selection (geometry pick or empty space both
+                    // reset it).
+                    if (m_sketchTool->getMode() == SketchToolMode::Select)
+                        m_selectedConstraintId = -1;
                     bool tryBoxSelect = (m_sketchTool->getMode() == SketchToolMode::Select);
                     int hitPt = -1, hitLn = -1, hitCv = -1;
                     if (tryBoxSelect) pickSketchAt(sketchCoord, hitPt, hitLn, hitCv);
@@ -7513,6 +7775,35 @@ void Application::renderViewport() {
                         }
                     }
                 }
+                // ТЗ-21: a tapped constraint icon (Select / Constrain mode)
+                // arms Delete here - the touch twin of the Delete key for
+                // constraints. One undo step, then the solver re-runs.
+                if (m_selectedConstraintId >= 0 && m_activeSketch) {
+                    bool exists = false;
+                    for (const auto& c : m_activeSketch->getConstraints())
+                        if (c.id == m_selectedConstraintId) { exists = true; break; }
+                    if (!exists) {
+                        m_selectedConstraintId = -1;
+                    } else {
+                        if (anyBtn) ImGui::SameLine();
+                        anyBtn = true;
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
+                        const bool delConstraint = wideButton("Delete");
+                        ImGui::PopStyleColor(2);
+                        if (delConstraint) {
+                            const int cid = m_selectedConstraintId;
+                            recordSketchMutation([&]{
+                                m_activeSketch->removeConstraint(cid); });
+                            if (m_sketchSolver) {
+                                m_sketchSolver->setSketch(m_activeSketch.get());
+                                m_sketchSolver->solve(*m_activeSketch);
+                            }
+                            m_selectedConstraintId = -1;
+                            markDirty();
+                        }
+                    }
+                }
             }
             if (placing && classicLayout()) {
                 SketchToolMode mode = m_sketchTool->getMode();
@@ -7863,6 +8154,41 @@ void Application::renderViewport() {
             if (m_selection) m_selection->clear();
             m_contextMenuPlaneId = -1;
         }
+        ImGui::EndPopup();
+    }
+
+    // ТЗ-21: the touch rail's Constraints button opens this popup - five
+    // large two-tap constraint tools (same deferred-OpenPopup pattern as the
+    // sketch context menu above).
+    if (m_sketchConstraintsMenuPending) {
+        ImGui::OpenPopup("SketchConstraintsMenu");
+        m_sketchConstraintsMenuPending = false;
+    }
+    if (m_inSketchMode && m_sketchTool && ImGui::BeginPopup("SketchConstraintsMenu")) {
+        auto constrainItem = [&](const char* label, ConstraintType t) {
+            const bool active =
+                m_sketchTool->getMode() == SketchToolMode::Constrain &&
+                m_constrainType == t;
+            if (active) {
+                const ImVec4 ac = materializr::accentText();
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(ac.x, ac.y, ac.z, 0.35f));
+            }
+            // >= 44 dp tall: a fingertip target, like every touch control.
+            const bool picked =
+                ImGui::Button(materializr::tr(label),
+                              ImVec2(uiW(200.0f), uiW(44.0f)));
+            if (active) ImGui::PopStyleColor();
+            if (picked) {
+                activateConstrainTool(t);
+                ImGui::CloseCurrentPopup();
+            }
+        };
+        constrainItem("Tangent", ConstraintType::Tangent);
+        constrainItem("Parallel", ConstraintType::Parallel);
+        constrainItem("Perpendicular", ConstraintType::Perpendicular);
+        constrainItem("Fix", ConstraintType::Fixed);
+        constrainItem("G2 (spline)", ConstraintType::G2);
         ImGui::EndPopup();
     }
 

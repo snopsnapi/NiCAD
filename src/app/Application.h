@@ -704,6 +704,26 @@ private:
     // Constraints section; constraints are always opt-in.
     void applySketchConstraint(ConstraintType type);
 
+    // ТЗ-21: Fusion-style two-tap constraint placement (touch rail's
+    // Constraints menu). activateConstrainTool enters/leaves SketchToolMode::
+    // Constrain with the given type; constrainTapPick consumes one tap's
+    // pick (entity ids, -1 = empty tap). Fix applies immediately off a
+    // single tap (line -> both endpoints, circle/arc -> centre (+ arc ends),
+    // spline -> all its control points); the pair tools wait for a second
+    // tap, validate the pairing (Parallel/Perpendicular = line+line;
+    // Tangent = line+curve or spline+anything-curvy; G2 = spline+other) and
+    // stay armed for the next constraint, Fusion-style.
+    void activateConstrainTool(ConstraintType type);
+    void constrainTapPick(int pointId, int lineId, int curveId);
+
+    // Add one constraint between explicit entity ids (b = -1 for single-
+    // entity types), or a batch of them, as ONE undoable sketch mutation
+    // followed by a solver pass - the shared tail of every constraint-add
+    // path. Fixed constraints pin the entity's CURRENT position (value/
+    // valueY are filled from the geometry here).
+    void addSketchConstraintPair(ConstraintType t, int a, int b = -1);
+    void addSketchConstraints(std::vector<Constraint> list);
+
     // Commit the Dimension tool's resolved pending dimension: one undoable
     // constraint add (or value+label update when the same pair is already
     // dimensioned), then open the ##DimEdit popup on it for value entry.
@@ -952,6 +972,26 @@ private:
     // input handler; consumed by the popup-render block on the next frame so
     // ImGui's OpenPopup happens inside the same window stack as the popup.
     bool m_sketchCtxMenuPending = false;
+
+    // ── ТЗ-21: Constraints menu / two-tap Constrain mode / constraint icons ──
+    // Set by handleToolAction(SketchConstrainMenu); consumed by the popup block
+    // in Application_Viewport.cpp (same deferred-OpenPopup pattern as above).
+    bool m_sketchConstraintsMenuPending = false;
+    // The Constrain tool's selected constraint type and, for the pair tools,
+    // the first tap's entity (id + SketchElementType as int). Only meaningful
+    // while m_sketchTool->getMode() == SketchToolMode::Constrain.
+    ConstraintType m_constrainType = ConstraintType::Parallel;
+    bool m_constrainHasFirst = false;
+    int  m_constrainFirstId = -1;
+    int  m_constrainFirstKind = -1;
+    // The constraint whose on-geometry icon is tapped (Select/Constrain mode).
+    // Its icon draws with the accent border; the bottom bar's Delete button
+    // removes it. -1 = none.
+    int m_selectedConstraintId = -1;
+    // Set while drawing the constraint icons when a tap landed on one this
+    // frame: the sketch input routing checks it so the same tap can't also
+    // pick geometry underneath (mirrors m_dimEditingClickedThisFrame).
+    bool m_constraintIconClickedThisFrame = false;
 
     std::unique_ptr<SketchSolver> m_sketchSolver;
     std::unique_ptr<SketchTool> m_sketchTool;

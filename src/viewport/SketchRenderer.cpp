@@ -1137,6 +1137,14 @@ void SketchRenderer::drawConstraints(const Sketch* sketch, const SketchSolver* s
     };
 
     for (const auto& c : constraints) {
+        // ТЗ-21: on touch the H/V/Parallel/Perpendicular markers are drawn
+        // as tappable ImGui icon plates on the geometry (Application_
+        // Viewport.cpp) instead - skip the GL glyphs so they never double up.
+        if (materializr::touchMode() &&
+            (c.type == ConstraintType::Horizontal || c.type == ConstraintType::Vertical ||
+             c.type == ConstraintType::Parallel || c.type == ConstraintType::Perpendicular))
+            continue;
+
         glm::vec3 color = c.isSatisfied ? glm::vec3(0.0f, 0.85f, 0.3f)   // green for satisfied
                                         : glm::vec3(0.95f, 0.15f, 0.15f); // red for unsatisfied
 
