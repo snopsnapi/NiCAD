@@ -2,6 +2,7 @@
 #include "SketchConstraints.h"
 #include "TextSketchOp.h"
 #include "../touch_mode.h"
+#include "../ui_scale.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1231,7 +1232,10 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                 glm::vec2 L(0), prev(0);
                 int prevId = -1;
                 bool haveChain = false;
-                if (m_mode == SketchToolMode::Spline &&
+                // Touch spline drawing: no symmetry suggestions - the first
+                // point's catch ring and plain point/grid snaps are the
+                // whole interaction there.
+                if (!touchMode() && m_mode == SketchToolMode::Spline &&
                     m_splinePoints.size() >= 2) {
                     const SketchPoint* pL =
                         m_sketch->getPoint(m_splinePoints.back());
@@ -1568,8 +1572,11 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     const bool haveDirAnchor = directionalAnchor(dirAnchor);
     // m_hasPrevLineDir is the mode guard here: only the Line chain and the
     // spline control polygon ever set it, and setMode clears it, so an arc or
-    // polygon can never inherit a previous leg from an earlier draw.
-    if (allowDirectional && haveDirAnchor && m_hasPrevLineDir) {
+    // polygon can never inherit a previous leg from an earlier draw. Touch
+    // spline drawing disables these guides entirely (a finger steers the
+    // curve, it doesn't dial in perp/parallel to the last leg).
+    if (allowDirectional && haveDirAnchor && m_hasPrevLineDir &&
+        !(touchMode() && m_mode == SketchToolMode::Spline)) {
         glm::vec2 perpDir(-m_prevLineDir.y, m_prevLineDir.x);
         glm::vec2 parDir = m_prevLineDir;
         glm::vec2 v = pos - dirAnchor;
@@ -2928,6 +2935,19 @@ void SketchTool::handleSplineTool(glm::vec2 pos) {
             ptId = pt.id;
             break;
         }
+    }
+
+    // Touch: with 3+ points placed, a tap near the FIRST point closes the
+    // spline even without an exact snap - the renderer draws a catch ring
+    // around it. A fingertip rarely lands dead-on; the exact-match loop
+    // above stays the desktop path.
+    if (ptId == -1 && touchMode() && m_splinePoints.size() >= 3 &&
+        m_mmPerPixel > 0.0f) {
+        constexpr float kCloseCatchDp = 24.0f;   // matches the renderer's ring
+        const SketchPoint* first = m_sketch->getPoint(m_splinePoints.front());
+        if (first &&
+            glm::length(pos - first->pos) < kCloseCatchDp * uiScale() * m_mmPerPixel)
+            ptId = m_splinePoints.front();
     }
 
     // Finishing flow (this used to not exist - the spline just "kept

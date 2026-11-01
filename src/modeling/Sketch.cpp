@@ -1,5 +1,6 @@
 #include "Sketch.h"
 
+#include "FitSpline.h"
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -25,7 +26,10 @@
 #include <GC_MakeCircle.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GeomAPI_PointsToBSpline.hxx>
+#include <GeomAPI_Interpolate.hxx>
 #include <TColgp_Array1OfPnt.hxx>
+#include <TColgp_HArray1OfPnt.hxx>
+#include <TColStd_HArray1OfReal.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <ElCLib.hxx>
 #include <gp_Pnt.hxx>
@@ -604,32 +608,104 @@ const std::vector<SketchSpline>& Sketch::getSplines() const {
 }
 
 namespace {
-// Centripetal Catmull-Rom point on the span p1->p2 at local t in [0,1].
-// LOCAL control: each span only sees its two neighbours, so the curve
-// hugs the clicked points instead of ballooning the way a global C2
-// interpolation does around sparse points and closed seams (Steve's
-// "the math is just a little off / it ends weird" vase).
-glm::vec2 catmullRomPoint(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2,
-                          glm::vec2 p3, float t) {
-    auto tj = [](float ti, glm::vec2 a, glm::vec2 b) {
-        float d = glm::length(b - a);
-        return ti + std::sqrt(std::max(d, 1e-6f));
-    };
-    float t0 = 0.0f;
-    float t1 = tj(t0, p0, p1);
-    float t2 = tj(t1, p1, p2);
-    float t3 = tj(t2, p2, p3);
-    float tt = t1 + (t2 - t1) * t;
-    auto lp = [](glm::vec2 a, glm::vec2 b, float u) {
-        return a * (1.0f - u) + b * u;
-    };
-    glm::vec2 A1 = lp(p0, p1, (tt - t0) / std::max(t1 - t0, 1e-6f));
-    glm::vec2 A2 = lp(p1, p2, (tt - t1) / std::max(t2 - t1, 1e-6f));
-    glm::vec2 A3 = lp(p2, p3, (tt - t2) / std::max(t3 - t2, 1e-6f));
-    glm::vec2 B1 = lp(A1, A2, (tt - t0) / std::max(t2 - t0, 1e-6f));
-    glm::vec2 B2 = lp(A2, A3, (tt - t1) / std::max(t3 - t1, 1e-6f));
-    return lp(B1, B2, (tt - t1) / std::max(t2 - t1, 1e-6f));
+// Exact interpolant through pts (in pts' own coordinate space): the C2 cubic
+// fitspline::interpolate for an open point set, OCCT's periodic
+// GeomAPI_Interpolate with EXPLICIT chord-length parameters for a closed one
+// (Parameters must carry one extra entry - the junction's parameter). Fills
+// `params` with the curve parameter at every span boundary (pts.size() open,
+// pts.size()+1 closed with the last entry the wrap of the first). Null handle
+// on failure (coincident points, singular system).
+Handle(Geom_BSplineCurve) exactSplineInterpolantUncached(const std::vector<glm::dvec3>& pts,
+                                                 bool closed,
+                                                 std::vector<double>& params) {
+    params.clear();
+    const int n = static_cast<int>(pts.size());
+    if (n < 2) return nullptr;
+    const int chords = closed ? n : n - 1;
+    std::vector<double> chord(static_cast<size_t>(chords));
+    double total = 0.0;
+    for (int i = 0; i < chords; ++i) {
+        chord[static_cast<size_t>(i)] = glm::length(pts[static_cast<size_t>((i + 1) % n)] - pts[static_cast<size_t>(i)]);
+        total += chord[static_cast<size_t>(i)];
+    }
+    if (total < 1e-12) return nullptr;
+    params.reserve(static_cast<size_t>(n) + 1);
+    params.push_back(0.0);
+    double acc = 0.0;
+    for (int i = 0; i < chords; ++i) {
+        acc += chord[static_cast<size_t>(i)];
+        params.push_back(acc / total);
+    }
+    try {
+        if (closed && n >= 3) {
+            // Periodic interpolation: the parameters become the curve's
+            // knots, so control point i sits exactly at params[i] and the
+            // junction at params.back().
+            params.back() = 1.0;
+            Handle(TColgp_HArray1OfPnt) arr = new TColgp_HArray1OfPnt(1, n);
+            Handle(TColStd_HArray1OfReal) prm = new TColStd_HArray1OfReal(1, n + 1);
+            for (int i = 0; i < n; ++i) {
+                arr->SetValue(i + 1, gp_Pnt(pts[static_cast<size_t>(i)].x,
+                                            pts[static_cast<size_t>(i)].y,
+                                            pts[static_cast<size_t>(i)].z));
+                prm->SetValue(i + 1, params[static_cast<size_t>(i)]);
+            }
+            prm->SetValue(n + 1, params.back());
+            GeomAPI_Interpolate ip(arr, prm, Standard_True, 1e-7);
+            ip.Perform();
+            return ip.IsDone() ? ip.Curve() : nullptr;
+        }
+        // fitspline's dense Gauss is O(n^3): fine for hand-placed splines, far too
+        // slow for traced outlines with hundreds of points. Same chord-length
+        // cubic C2 interpolant via OCCT's banded solver there.
+        if (n > 40) {
+            Handle(TColgp_HArray1OfPnt) arr = new TColgp_HArray1OfPnt(1, n);
+            Handle(TColStd_HArray1OfReal) prm = new TColStd_HArray1OfReal(1, n);
+            for (int i = 0; i < n; ++i) {
+                arr->SetValue(i + 1, gp_Pnt(pts[static_cast<size_t>(i)].x,
+                                            pts[static_cast<size_t>(i)].y,
+                                            pts[static_cast<size_t>(i)].z));
+                prm->SetValue(i + 1, params[static_cast<size_t>(i)]);
+            }
+            GeomAPI_Interpolate ip(arr, prm, Standard_False, 1e-7);
+            ip.Perform();
+            return ip.IsDone() ? ip.Curve() : nullptr;
+        }
+        fitspline::Curve c;
+        if (!fitspline::interpolate(pts, {}, 3, c)) return nullptr;
+        Handle(Geom_BSplineCurve) curve = fitspline::toOcct(c);
+        if (!curve.IsNull()) params = c.params;
+        return curve;
+    } catch (...) {
+        return nullptr;
+    }
 }
+
+// interpolate2D runs every frame (renderer, snapping, trim), so the curve is
+// memoised per thread on the exact input points. A small FIFO is enough: the
+// working set is the splines currently on screen.
+Handle(Geom_BSplineCurve) exactSplineInterpolant(const std::vector<glm::dvec3>& pts,
+                                                 bool closed,
+                                                 std::vector<double>& params) {
+    struct Entry {
+        std::vector<glm::dvec3> pts;
+        bool closed = false;
+        Handle(Geom_BSplineCurve) curve;
+        std::vector<double> params;
+    };
+    thread_local std::vector<Entry> cache;
+    for (const Entry& e : cache) {
+        if (e.closed == closed && e.pts == pts) {
+            params = e.params;
+            return e.curve;   // read-only use by callers; sharing the handle is safe per thread
+        }
+    }
+    Handle(Geom_BSplineCurve) c = exactSplineInterpolantUncached(pts, closed, params);
+    if (cache.size() >= 64) cache.erase(cache.begin());
+    cache.push_back({pts, closed, c, params});
+    return c;
+}
+
 } // anonymous
 
 std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
@@ -640,10 +716,6 @@ std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
     if (n < 2) return ctrl;
     auto at = [&](int i) -> glm::vec2 {
         if (closed) return ctrl[((i % n) + n) % n];
-        // Open ends: reflect the end point through its neighbour for a
-        // natural phantom tangent.
-        if (i < 0) return ctrl[0] * 2.0f - ctrl[1];
-        if (i >= n) return ctrl[n - 1] * 2.0f - ctrl[n - 2];
         return ctrl[i];
     };
     // `segsPerSpan` is a per-caller MINIMUM, not the actual count: a control
@@ -662,9 +734,27 @@ std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
     // making a single redraw expensive.
     constexpr float kTargetSegMm = 0.4f;
     constexpr int kMaxSegsPerSpan = 200;
-    int spans = closed ? n : n - 1;
+    const int spans = closed ? n : n - 1;
+
+    // The curve is the exact C2 interpolant through the control points (the
+    // same construction FitSpline validates against the Nikaishi reference
+    // and that buildWires() emits for geometry), not the old per-span
+    // centripetal Catmull-Rom that was only G1 - curvature jumped at every
+    // control point. Each span is still subdivided by chord length below, so
+    // every caller gets the identical polyline format.
+    std::vector<glm::dvec3> pts3;
+    pts3.reserve(static_cast<size_t>(n));
+    for (const glm::vec2& p : ctrl) pts3.emplace_back(p.x, p.y, 0.0);
+    std::vector<double> params;
+    Handle(Geom_BSplineCurve) curve =
+        exactSplineInterpolant(pts3, closed && n >= 3, params);
+    // The curve is only usable when its parameters cover every span boundary
+    // (a closed spline with fewer than 3 distinct points falls back to the
+    // chords, same as a failed interpolation).
+    const bool smooth = !curve.IsNull() && params.size() == static_cast<size_t>(spans) + 1;
+
     std::vector<glm::vec2> out;
-    out.reserve(spans * segsPerSpan + 1);
+    out.reserve(static_cast<size_t>(spans) * segsPerSpan + 1);
     for (int s = 0; s < spans; ++s) {
         const float spanLen = glm::length(at(s + 1) - at(s));
         const int segs = std::clamp(
@@ -672,9 +762,18 @@ std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
             segsPerSpan, kMaxSegsPerSpan);
         if (spanStartIdx) spanStartIdx->push_back(static_cast<int>(out.size()));
         for (int i = 0; i < segs; ++i) {
-            float t = static_cast<float>(i) / segs;
-            out.push_back(catmullRomPoint(at(s - 1), at(s), at(s + 1),
-                                          at(s + 2), t));
+            const float t = static_cast<float>(i) / segs;
+            if (smooth) {
+                const double u0 = params[static_cast<size_t>(s)];
+                const gp_Pnt q = curve->Value(
+                    u0 + (params[static_cast<size_t>(s) + 1] - u0) * t);
+                out.emplace_back(static_cast<float>(q.X()),
+                                 static_cast<float>(q.Y()));
+            } else {
+                // No interpolant (coincident control points): straight chord
+                // segments between the points.
+                out.push_back(at(s) + (at(s + 1) - at(s)) * t);
+            }
         }
     }
     if (spanStartIdx) spanStartIdx->push_back(static_cast<int>(out.size()));
@@ -1367,14 +1466,50 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
             return false; // (a CLOSED spline legitimately starts where it ends)
 
         if (es.splineIdx >= 0) {
-            // The SAME centripetal Catmull-Rom curve the renderer draws, densely
-            // sampled and fitted with a B-spline - what you see is what extrudes.
-            // A sub-edge (splineSampStart/End set, from a point landing on the
-            // spline and splitting it) emits only that slice, with its ends pinned
-            // to the shared points so the pieces + the landing line meet exactly.
+            // The EXACT interpolant the renderer draws (C2 through the control
+            // points; periodic when closed) - no resampling and no
+            // least-squares refit, so the extruded edge IS the curve. A
+            // sub-edge (splineSampStart/End set, from a point landing on the
+            // spline and splitting it) keeps the old samples+fit path, with
+            // its ends pinned to the shared points so the pieces + the
+            // landing line meet exactly.
             const SketchSpline& sp = m_splines[es.splineIdx];
-            std::vector<glm::vec2> full = sampleSpline2D(sp, 24); // density matches adjacency
             const bool subEdge = (es.splineSampStart >= 0 && es.splineSampEnd >= 0);
+            const bool closedSp = sp.controlPointIds.size() > 2 &&
+                                  sp.controlPointIds.front() == sp.controlPointIds.back();
+            if (!subEdge) {
+                // World-space control points (skip dangling ids and the
+                // repeated seam id, same as sampleSpline2D) - the exact
+                // curve passes exactly through the wire's shared endpoints.
+                std::vector<glm::dvec3> pts3;
+                const auto& ids = sp.controlPointIds;
+                const size_t nCtrl = ids.size() - (closedSp ? 1 : 0);
+                pts3.reserve(nCtrl);
+                for (size_t k = 0; k < nCtrl; ++k) {
+                    const SketchPoint* cp = getPoint(ids[k]);
+                    if (!cp) continue;
+                    const gp_Pnt w = sketchToWorld(cp->pos);
+                    pts3.emplace_back(w.X(), w.Y(), w.Z());
+                }
+                std::vector<double> params;
+                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(pts3, closedSp, params);
+                // The interpolant is memoised; an edge must own its geometry.
+                if (!curve.IsNull()) curve = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+                if (!curve.IsNull()) {
+                    try {
+                        Handle(Geom_Curve) ec2 = curve;
+                        if (fromPt == es.endPtId && !closedSp)
+                            ec2 = ec2->Reversed();   // same reversal the sample path did
+                        BRepBuilderAPI_MakeEdge mk(ec2);
+                        if (!mk.IsDone()) return false;
+                        wm.Add(mk.Edge());
+                        return true;
+                    } catch (...) { return false; }
+                }
+                // Exact build failed (coincident control points): fall through
+                // to the sampled fit below.
+            }
+            std::vector<glm::vec2> full = sampleSpline2D(sp, 24); // density matches adjacency
             std::vector<glm::vec2> samp;
             if (subEdge) {
                 int a = std::max(0, es.splineSampStart);
@@ -1392,9 +1527,10 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
                 samp = std::move(full);
             }
             if (samp.size() < 2) return false;
-            bool closedSp = !subEdge && sp.controlPointIds.size() > 2 &&
-                            sp.controlPointIds.front() == sp.controlPointIds.back();
-            if (fromPt == es.endPtId && !closedSp)
+            // The sample+fit path treats a sub-edge of a closed spline as
+            // open (it was the whole-spline-only closed check before).
+            const bool fitClosed = !subEdge && closedSp;
+            if (fromPt == es.endPtId && !fitClosed)
                 std::reverse(samp.begin(), samp.end());
             thinSamplesForFit(samp);
             try {
@@ -2210,7 +2346,8 @@ std::vector<Sketch::Region> Sketch::buildRegionsUncached(
                 if (mk.IsDone()) toolEdges.Append(mk.Edge());
             } catch (...) {}
         }
-        // Splines as dividing tools - same B-spline fit as emitOcctEdge.
+        // Splines as dividing tools - the exact interpolant emitOcctEdge emits
+        // (the sample polyline below only feeds the boundary-sliver test).
         for (const auto& sp : m_splines) {
             if (sp.isConstruction || sp.controlPointIds.size() < 2) continue;
             std::vector<glm::vec2> samp = sampleSpline2D(sp, 24);
@@ -2222,14 +2359,25 @@ std::vector<Sketch::Region> Sketch::buildRegionsUncached(
                 glm::vec2 tang = samp[hiK] - samp[lo];
                 if (!isDivider(samp[mi], glm::vec2(-tang.y, tang.x))) continue;
             }
-            thinSamplesForFit(samp);
+            const bool closedSp = sp.controlPointIds.size() > 2 &&
+                                  sp.controlPointIds.front() == sp.controlPointIds.back();
+            std::vector<glm::dvec3> pts3;
+            const auto& ids = sp.controlPointIds;
+            const size_t nCtrl = ids.size() - (closedSp ? 1 : 0);
+            pts3.reserve(nCtrl);
+            for (size_t k = 0; k < nCtrl; ++k) {
+                const SketchPoint* cp = getPoint(ids[k]);
+                if (!cp) continue;
+                const gp_Pnt w = sketchToWorld(cp->pos);
+                pts3.emplace_back(w.X(), w.Y(), w.Z());
+            }
+            std::vector<double> params;
             try {
-                TColgp_Array1OfPnt arr(1, static_cast<int>(samp.size()));
-                for (size_t k = 0; k < samp.size(); ++k)
-                    arr.SetValue(static_cast<int>(k) + 1, sketchToWorld(samp[k]));
-                GeomAPI_PointsToBSpline fit(arr, 3, 8, GeomAbs_C2, 1.0e-3);
-                if (!fit.IsDone()) continue;
-                BRepBuilderAPI_MakeEdge mk(fit.Curve());
+                Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(pts3, closedSp, params);
+                // The interpolant is memoised; an edge must own its geometry.
+                if (!curve.IsNull()) curve = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+                if (curve.IsNull()) continue;
+                BRepBuilderAPI_MakeEdge mk(curve);
                 if (mk.IsDone()) toolEdges.Append(mk.Edge());
             } catch (...) {}
         }
@@ -2500,8 +2648,8 @@ bool recoverSketchLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed)
 
     // Otherwise: split at sharp corners (so straight edges stay straight),
     // then each run becomes a single line or a spline that passes THROUGH the
-    // samples. Centripetal Catmull-Rom interpolates its control points, so a
-    // spline joins its neighbours exactly - no gaps, and truer to the curve
+    // samples. The exact C2 interpolant passes through its control points, so
+    // a spline joins its neighbours exactly - no gaps, and truer to the curve
     // than an arc fit would be.
     auto turnAt = [&](int i) -> double {
         glm::vec2 v1 = at(i) - at(i-1), v2 = at(i+1) - at(i);

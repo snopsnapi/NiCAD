@@ -5,6 +5,8 @@
 #include "modeling/SketchTool.h"
 #include "modeling/SketchSolver.h"
 #include "modeling/SketchConstraints.h"
+#include "../touch_mode.h"
+#include "../ui_scale.h"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <gp_Ax3.hxx>
@@ -809,18 +811,41 @@ void SketchRenderer::drawPreview(const Sketch* sketch, const SketchTool* tool,
     if (mode == SketchToolMode::Spline) {
         // Live smooth preview: the curve through every placed control
         // point plus the cursor, interpolated the same way the committed
-        // spline (and its extrudable geometry) will be.
+        // spline (and its extrudable geometry) will be. Touch draws only
+        // the placed points - a yellow tail chasing the finger reads as
+        // noise there; the desktop keeps the trailing segment.
         std::vector<glm::vec2> ctrl;
         for (int id : tool->splinePointsInProgress())
             if (const SketchPoint* p = lutPoint(sketch, id))
                 ctrl.push_back(p->pos);
-        ctrl.push_back(end);
+        const bool touch = materializr::touchMode();
+        if (!touch) ctrl.push_back(end);
         std::vector<glm::vec2> pts = Sketch::interpolate2D(ctrl, 12);
         for (size_t i = 0; i + 1 < pts.size(); ++i) {
             pushPt(verts, pw(pts[i]));
             pushPt(verts, pw(pts[i + 1]));
         }
         uploadAndDraw(verts, GL_LINES, color, vp, 1.5f);
+        // Touch: with 3+ points the first point wears a yellow catch ring;
+        // tapping it closes the spline (handleSplineTool's 24 dp catch).
+        if (touch && tool->splinePointsInProgress().size() >= 3 &&
+            tool->pixelScale() > 0.0f) {
+            constexpr float kRingDp = 18.0f;
+            const float r = kRingDp * materializr::uiScale() * tool->pixelScale();
+            const SketchPoint* first =
+                lutPoint(sketch, tool->splinePointsInProgress().front());
+            if (first) {
+                std::vector<float> ring;
+                const int segs = 48;
+                for (int i = 0; i < segs; i++) {
+                    float a1 = 2.0f * (float)M_PI * i / segs;
+                    float a2 = 2.0f * (float)M_PI * (i + 1) / segs;
+                    pushPt(ring, pw(first->pos + glm::vec2(std::cos(a1), std::sin(a1)) * r));
+                    pushPt(ring, pw(first->pos + glm::vec2(std::cos(a2), std::sin(a2)) * r));
+                }
+                uploadAndDraw(ring, GL_LINES, color, vp, 1.5f);
+            }
+        }
     } else if (mode == SketchToolMode::Line) {
         pushPt(verts, pw(start));
         pushPt(verts, pw(end));
