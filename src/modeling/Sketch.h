@@ -502,7 +502,7 @@ bool constraintIsArcRadius(const Sketch& sk, const Constraint& c);
 // loop is split at sharp corners (turn angle > ~30 deg) so real straight
 // edges stay straight, and each run is Douglas-Peucker simplified into a
 // single SketchLine (2 points left) or a SketchSpline threaded through the
-// kept samples (a centripetal Catmull-Rom, so adjacent runs join exactly,
+// kept samples (the exact C2 interpolant, so adjacent runs join exactly,
 // unlike a fitted arc that doesn't pass through the sampled endpoints).
 // Anything jagged or oversized falls back to the original dense polyline as
 // plain (fromText) lines - the worst case is the old one-line-per-sample

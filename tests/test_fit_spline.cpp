@@ -7,6 +7,7 @@
 // hand-written de Boor evaluator.
 
 #include "modeling/FitSpline.h"
+#include "modeling/Sketch.h"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -147,6 +148,69 @@ TEST(FitSpline, ClosedInterpolatesPeriodically) {
         for (int i = 1; i <= ext.NbExt(); ++i)
             dmin = std::min(dmin, std::sqrt(ext.SquareDistance(i)));
         EXPECT_LT(dmin, 1e-7);
+    }
+}
+
+TEST(FitSpline, SketchInterpolate2D) {
+    // The sketch sampler must now produce the exact C2 interpolant, not the
+    // old G1 Catmull-Rom: the polyline passes through every control point
+    // (at spanStartIdx) and the underlying curve is C2 in the interior.
+    std::vector<glm::vec2> ctrl;
+    ctrl.emplace_back(0.0f, 0.0f);
+    ctrl.emplace_back(10.0f, 14.0f);
+    ctrl.emplace_back(24.0f, 5.0f);
+    ctrl.emplace_back(33.0f, 21.0f);
+    ctrl.emplace_back(48.0f, 9.0f);
+    ctrl.emplace_back(60.0f, 16.0f);
+
+    std::vector<int> spanStart;
+    const std::vector<glm::vec2> samp =
+        Sketch::interpolate2D(ctrl, 8, false, &spanStart);
+
+    // One span-start per control point plus the trailing end marker.
+    ASSERT_EQ(spanStart.size(), ctrl.size() + 1);
+    for (size_t i = 0; i < ctrl.size(); ++i) {
+        ASSERT_LT(static_cast<size_t>(spanStart[i]), samp.size());
+        EXPECT_NEAR(glm::length(samp[static_cast<size_t>(spanStart[i])] - ctrl[i]),
+                    0.0, 1e-4)
+            << "open sample at span " << i;
+    }
+
+    // C2 across every interior control point: second derivatives agree at
+    // params[i] +/- 1e-6 (1e-3 relative). interpolate2D builds the curve
+    // with the same chord parameterisation from the same points.
+    std::vector<glm::dvec3> pts3;
+    for (const glm::vec2& p : ctrl) pts3.emplace_back(p.x, p.y, 0.0);
+    fitspline::Curve c;
+    ASSERT_TRUE(fitspline::interpolate(pts3, {}, 3, c));
+    ASSERT_EQ(c.params.size(), ctrl.size());
+    for (size_t i = 1; i + 1 < ctrl.size(); ++i) {
+        const double t = c.params[i];
+        const glm::dvec3 d2l = fitspline::evaluate(c, t - 1e-6, 2);
+        const glm::dvec3 d2r = fitspline::evaluate(c, t + 1e-6, 2);
+        const double scale = 1.0 + std::max(glm::length(d2l), glm::length(d2r));
+        EXPECT_LE(glm::length(d2l - d2r), 1e-3 * scale) << "C2 at point " << i;
+    }
+
+    // Closed: the polyline wraps back to the first point and every span
+    // starts on its control point, the last span closing on the first.
+    std::vector<glm::vec2> cctrl;
+    cctrl.emplace_back(0.0f, 0.0f);
+    cctrl.emplace_back(20.0f, 4.0f);
+    cctrl.emplace_back(34.0f, 18.0f);
+    cctrl.emplace_back(18.0f, 30.0f);
+    cctrl.emplace_back(-4.0f, 16.0f);
+    std::vector<int> cspan;
+    const std::vector<glm::vec2> csamp =
+        Sketch::interpolate2D(cctrl, 8, true, &cspan);
+    ASSERT_FALSE(csamp.empty());
+    EXPECT_NEAR(glm::length(csamp.front() - csamp.back()), 0.0, 1e-4);
+    ASSERT_EQ(cspan.size(), cctrl.size() + 1);
+    for (size_t i = 0; i < cctrl.size(); ++i) {
+        ASSERT_LT(static_cast<size_t>(cspan[i]), csamp.size());
+        EXPECT_NEAR(glm::length(csamp[static_cast<size_t>(cspan[i])] - cctrl[i]),
+                    0.0, 1e-4)
+            << "closed sample at span " << i;
     }
 }
 

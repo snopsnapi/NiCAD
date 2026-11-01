@@ -324,6 +324,7 @@ public:
     // Sketch millimetres per screen pixel, pushed in each frame by the
     // viewport. 0 until the first frame, which falls back to the grid.
     void setPixelScale(float mmPerPx) { m_mmPerPixel = mmPerPx > 0.0f ? mmPerPx : 0.0f; }
+    float pixelScale() const { return m_mmPerPixel; }   // 0 until the first viewport frame
 
     // Pointing tolerance, in sketch millimetres. A tolerance is a SCREEN
     // distance - how near the cursor is in pixels - not a property of the
