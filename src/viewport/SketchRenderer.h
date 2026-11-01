@@ -124,6 +124,7 @@ private:
         GLenum mode = GL_LINES;
         glm::vec3 color{1.0f};
         float width = 1.0f;
+        bool wide = false;  // touch: GL_LINES expanded to 7-float triangle verts
     };
     struct CapturedPass {
         std::vector<float> verts;
@@ -141,6 +142,12 @@ private:
     void drawBuffer(const PassBuf& p, const glm::mat4& vp);
     void freeEntry(SketchCacheEntry& e);
     std::uint64_t contentSignature(const Sketch* sketch) const;
+
+    // Touch-mode wide lines: triangle-quad verts already resident in `vao`'s
+    // buffer (7 floats/vertex: pos3, other-end3, side1). Sets the wide
+    // program's uniforms (viewport queried here, at draw time) and draws.
+    void drawWideTriangles(unsigned int vao, int count, const glm::vec3& color,
+                           const glm::mat4& vp, float widthPx);
 
     // Frame-local point lookup: Sketch::getPoint is a linear scan, and the
     // draw passes called it 1-3× per element - O(elements × points) per
@@ -162,6 +169,19 @@ private:
     int m_locColor = -1;
     int m_locAlpha = -1;
     int m_locPointSize = -1;
+    int m_locRoundPoints = -1; // touch: cut GL_POINTS into discs
+
+    // Touch-mode wide lines: GL_LINES pairs expanded on the CPU into triangle
+    // quads - GLES only guarantees 1 px line width, which reads as a hairline
+    // at tablet dpi. Compiled everywhere but only drawn when touchMode().
+    unsigned int m_wideProgram = 0;
+    unsigned int m_wideVao = 0;
+    unsigned int m_wideVbo = 0;
+    int m_locWideMVP = -1;
+    int m_locWideColor = -1;
+    int m_locWideAlpha = -1;
+    int m_locWideViewport = -1;
+    int m_locWideWidthPx = -1;
 };
 
 } // namespace materializr

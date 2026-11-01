@@ -38,15 +38,72 @@ void main() {
 }
 )";
 
+// Touch-mode wide lines: one source segment (a_pos, a_other) becomes a quad
+// of two triangles; a_side (-1/+1) picks the perpendicular edge. The offset
+// is applied in window pixels so u_widthPx = lineWidth * uiScale() tracks the
+// screen density. Compiles for desktop GL too, drawn only under touchMode().
+static const char* s_wideVertSource = R"(
+#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_other;
+layout(location = 2) in float a_side;
+uniform mat4 u_mvp;
+uniform vec2 u_viewport;   // drawable size, physical px
+uniform float u_widthPx;   // line width, physical px
+void main() {
+    vec4 c = u_mvp * vec4(a_pos, 1.0);
+    vec4 co = u_mvp * vec4(a_other, 1.0);
+    vec2 pa = (c.xy / c.w) * 0.5 * u_viewport;
+    vec2 pb = (co.xy / co.w) * 0.5 * u_viewport;
+    vec2 d = pb - pa;
+    float len = length(d);
+    vec2 n = len > 1e-4 ? vec2(-d.y, d.x) / len : vec2(0.0);
+    c.xy += (n * (a_side * u_widthPx * 0.5)) / (0.5 * u_viewport) * c.w;
+    gl_Position = c;
+}
+)";
+
 static const char* s_fragSource = R"(
 #version 330 core
 uniform vec3 u_color;
 uniform float u_alpha;
+uniform float u_roundPoints;   // touch: cut GL_POINTS into discs
 out vec4 fragColor;
 void main() {
+    if (u_roundPoints > 0.5) {
+        vec2 pc = gl_PointCoord * 2.0 - 1.0;
+        if (dot(pc, pc) > 1.0) discard;
+    }
     fragColor = vec4(u_color, u_alpha);
 }
 )";
+
+// Expand GL_LINES pairs (x,y,z, x,y,z per segment) into the wide-line vertex
+// stream: two triangles per segment, 6 vertices of (pos3, other3, side1).
+// At B a_other is A, which flips the shader's perpendicular - hence the
+// mirrored a_side there. Order per segment:
+//   (A,B,-1) (A,B,+1) (B,A,-1) | (B,A,-1) (B,A,+1) (A,B,-1)
+// i.e. quad corners A-, A+, B+, then A-, B+, B- (no degenerate triangles).
+static void expandLinesWide(const std::vector<float>& verts, std::vector<float>& out) {
+    out.clear();
+    const size_t segs = verts.size() / 6;
+    out.reserve(segs * 6 * 7);
+    auto push = [&out](const float* pos, const float* other, float side) {
+        out.push_back(pos[0]); out.push_back(pos[1]); out.push_back(pos[2]);
+        out.push_back(other[0]); out.push_back(other[1]); out.push_back(other[2]);
+        out.push_back(side);
+    };
+    for (size_t i = 0; i < segs; ++i) {
+        const float* a = verts.data() + i * 6;
+        const float* b = a + 3;
+        push(a, b, -1.0f);
+        push(a, b, +1.0f);
+        push(b, a, -1.0f);
+        push(b, a, -1.0f);
+        push(b, a, +1.0f);
+        push(a, b, -1.0f);
+    }
+}
 
 SketchRenderer::SketchRenderer() {}
 
@@ -55,6 +112,9 @@ SketchRenderer::~SketchRenderer() {
     if (m_program) glDeleteProgram(m_program);
     if (m_vao) glDeleteVertexArrays(1, &m_vao);
     if (m_vbo) glDeleteBuffers(1, &m_vbo);
+    if (m_wideProgram) glDeleteProgram(m_wideProgram);
+    if (m_wideVao) glDeleteVertexArrays(1, &m_wideVao);
+    if (m_wideVbo) glDeleteBuffers(1, &m_wideVbo);
 }
 
 void SketchRenderer::freeEntry(SketchCacheEntry& e) {
@@ -157,20 +217,47 @@ std::uint64_t SketchRenderer::contentSignature(const Sketch* sketch) const {
     return h;
 }
 
+void SketchRenderer::drawWideTriangles(unsigned int vao, int count,
+                                       const glm::vec3& color, const glm::mat4& vp,
+                                       float widthPx) {
+    glUseProgram(m_wideProgram);
+    glUniformMatrix4fv(m_locWideMVP, 1, GL_FALSE, glm::value_ptr(vp));
+    glUniform3fv(m_locWideColor, 1, glm::value_ptr(color));
+    glUniform1f(m_locWideAlpha, 1.0f);
+    GLint viewport[4] = {0, 0, 1, 1};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glUniform2f(m_locWideViewport,
+                static_cast<float>(viewport[2] > 0 ? viewport[2] : 1),
+                static_cast<float>(viewport[3] > 0 ? viewport[3] : 1));
+    glUniform1f(m_locWideWidthPx, widthPx);
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, count);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
 void SketchRenderer::drawBuffer(const PassBuf& p, const glm::mat4& vp) {
     if (!p.count || !p.vao) return;
     // Mirrors uploadAndDraw's state setup, minus the CPU regen + upload.
+    if (p.wide && m_wideProgram) {
+        drawWideTriangles(p.vao, p.count, p.color, vp, p.width * materializr::uiScale());
+        return;
+    }
     glUseProgram(m_program);
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(vp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(p.color));
     glUniform1f(m_locAlpha, 1.0f);
     glBindVertexArray(p.vao);
-    glLineWidth(p.width);
+    const bool roundPoints = materializr::touchMode() && p.mode == GL_POINTS;
+    const float w = roundPoints ? p.width * materializr::uiScale() : p.width;
+    glLineWidth(w);
     if (m_locPointSize >= 0)
-        glUniform1f(m_locPointSize, p.mode == GL_POINTS ? p.width : 1.0f);
+        glUniform1f(m_locPointSize, p.mode == GL_POINTS ? w : 1.0f);
 #if !defined(MZ_GLES)
-    if (p.mode == GL_POINTS) glPointSize(p.width);
+    if (p.mode == GL_POINTS) glPointSize(w);
 #endif
+    if (m_locRoundPoints >= 0)
+        glUniform1f(m_locRoundPoints, roundPoints ? 1.0f : 0.0f);
     glDrawArrays(p.mode, 0, p.count);
     glBindVertexArray(0);
     glUseProgram(0);
@@ -207,17 +294,40 @@ void SketchRenderer::renderCachedStatic(const Sketch* sketch, const glm::mat4& v
             p.mode = c.mode;
             p.color = c.color;
             p.width = c.width;
-            p.count = static_cast<int>(c.verts.size() / 3);
+            // Touch: expand GL_LINES into wide-line triangle verts ONCE, now;
+            // the persistent buffer then holds the 7-float format directly.
+            std::vector<float> wide;
+            const std::vector<float>* data = &c.verts;
+            if (materializr::touchMode() && c.mode == GL_LINES && m_wideProgram) {
+                expandLinesWide(c.verts, wide);
+                data = &wide;
+                p.wide = true;
+                p.count = static_cast<int>(wide.size() / 7);
+            } else {
+                p.count = static_cast<int>(c.verts.size() / 3);
+            }
             glGenVertexArrays(1, &p.vao);
             glGenBuffers(1, &p.vbo);
             glBindVertexArray(p.vao);
             glBindBuffer(GL_ARRAY_BUFFER, p.vbo);
             glBufferData(GL_ARRAY_BUFFER,
-                         static_cast<GLsizeiptr>(c.verts.size() * sizeof(float)),
-                         c.verts.data(), GL_STATIC_DRAW);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-                                  nullptr);
-            glEnableVertexAttribArray(0);
+                         static_cast<GLsizeiptr>(data->size() * sizeof(float)),
+                         data->data(), GL_STATIC_DRAW);
+            if (p.wide) {
+                constexpr GLsizei kStride = 7 * sizeof(float);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, kStride, nullptr);
+                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, kStride,
+                                      reinterpret_cast<void*>(3 * sizeof(float)));
+                glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, kStride,
+                                      reinterpret_cast<void*>(6 * sizeof(float)));
+                glEnableVertexAttribArray(0);
+                glEnableVertexAttribArray(1);
+                glEnableVertexAttribArray(2);
+            } else {
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                                      nullptr);
+                glEnableVertexAttribArray(0);
+            }
             glBindVertexArray(0);
             e.passes.push_back(p);
         }
@@ -254,6 +364,7 @@ bool SketchRenderer::initialize() {
     m_locColor = glGetUniformLocation(m_program, "u_color");
     m_locAlpha = glGetUniformLocation(m_program, "u_alpha");
     m_locPointSize = glGetUniformLocation(m_program, "u_pointSize");
+    m_locRoundPoints = glGetUniformLocation(m_program, "u_roundPoints");
 
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
@@ -263,6 +374,51 @@ bool SketchRenderer::initialize() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
+
+    // Wide-line program (touch only). Same compile path as above - the
+    // glShaderSource shim rewrites it for GLES. A failure here is not fatal:
+    // the touch line path then falls back to plain GL_LINES.
+    unsigned int wvert = 0, wfrag = 0;
+    if (compileShader(wvert, GL_VERTEX_SHADER, s_wideVertSource) &&
+        compileShader(wfrag, GL_FRAGMENT_SHADER, s_fragSource)) {
+        m_wideProgram = glCreateProgram();
+        glAttachShader(m_wideProgram, wvert);
+        glAttachShader(m_wideProgram, wfrag);
+        glLinkProgram(m_wideProgram);
+        glDeleteShader(wvert);
+        glDeleteShader(wfrag);
+        int wok = 0;
+        glGetProgramiv(m_wideProgram, GL_LINK_STATUS, &wok);
+        if (!wok) {
+            char log[512];
+            glGetProgramInfoLog(m_wideProgram, 512, nullptr, log);
+            std::fprintf(stderr, "SketchRenderer wide-line link error: %s\n", log);
+            glDeleteProgram(m_wideProgram);
+            m_wideProgram = 0;
+        }
+    }
+    if (m_wideProgram) {
+        m_locWideMVP = glGetUniformLocation(m_wideProgram, "u_mvp");
+        m_locWideColor = glGetUniformLocation(m_wideProgram, "u_color");
+        m_locWideAlpha = glGetUniformLocation(m_wideProgram, "u_alpha");
+        m_locWideViewport = glGetUniformLocation(m_wideProgram, "u_viewport");
+        m_locWideWidthPx = glGetUniformLocation(m_wideProgram, "u_widthPx");
+
+        glGenVertexArrays(1, &m_wideVao);
+        glGenBuffers(1, &m_wideVbo);
+        glBindVertexArray(m_wideVao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_wideVbo);
+        constexpr GLsizei kStride = 7 * sizeof(float);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, kStride, nullptr);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, kStride,
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, kStride,
+                              reinterpret_cast<void*>(6 * sizeof(float)));
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+    }
 
     return true;
 }
@@ -279,6 +435,21 @@ void SketchRenderer::uploadAndDraw(const std::vector<float>& verts, GLenum mode,
         return;
     }
 
+    // Touch: draw lines as triangle quads - GLES does not honour glLineWidth
+    // above 1 px, and the fixed-pixel widths read as hairlines at tablet dpi.
+    if (materializr::touchMode() && mode == GL_LINES && m_wideProgram) {
+        std::vector<float> wide;
+        expandLinesWide(verts, wide);
+        glBindVertexArray(m_wideVao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_wideVbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(wide.size() * sizeof(float)),
+                     wide.data(), GL_DYNAMIC_DRAW);
+        drawWideTriangles(m_wideVao, static_cast<int>(wide.size() / 7), color, vp,
+                          lineWidth * materializr::uiScale());
+        return;
+    }
+
     glUseProgram(m_program);
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(vp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(color));
@@ -288,14 +459,18 @@ void SketchRenderer::uploadAndDraw(const std::vector<float>& verts, GLenum mode,
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
 
-    glLineWidth(lineWidth);
     // For GL_POINTS the same `lineWidth` arg doubles as the marker diameter.
     // GL ES has no glPointSize, so the vertex shader sets gl_PointSize from this
-    // uniform; desktop honours glPointSize directly.
-    if (m_locPointSize >= 0) glUniform1f(m_locPointSize, mode == GL_POINTS ? lineWidth : 1.0f);
+    // uniform; desktop honours glPointSize directly. Touch scales the diameter
+    // by uiScale and cuts the square GLES points into discs (u_roundPoints).
+    const bool roundPoints = materializr::touchMode() && mode == GL_POINTS;
+    const float w = roundPoints ? lineWidth * materializr::uiScale() : lineWidth;
+    glLineWidth(w);
+    if (m_locPointSize >= 0) glUniform1f(m_locPointSize, mode == GL_POINTS ? w : 1.0f);
 #if !defined(MZ_GLES)
-    if (mode == GL_POINTS) glPointSize(lineWidth);
+    if (mode == GL_POINTS) glPointSize(w);
 #endif
+    if (m_locRoundPoints >= 0) glUniform1f(m_locRoundPoints, roundPoints ? 1.0f : 0.0f);
 
     glDrawArrays(mode, 0, static_cast<int>(verts.size() / 3));
 
@@ -1338,6 +1513,7 @@ void SketchRenderer::renderFacesFill(const std::vector<TopoDS_Face>& faces,
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(vp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(color));
     glUniform1f(m_locAlpha, alpha);
+    if (m_locRoundPoints >= 0) glUniform1f(m_locRoundPoints, 0.0f);
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(),
