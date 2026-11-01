@@ -3744,21 +3744,58 @@ bool planSplineTrim(const Sketch& sketch, const SketchSpline& spl, glm::vec2 pos
 
     // The survivor running from sample coordinate lo to hi: the cut points at
     // its ends (or the spline's own end points when it runs to one) and every
-    // control point strictly between.
+    // control point strictly between. A NEW cut end's shortened span gets extra
+    // points sampled from the old curve, so the rebuilt spline's global C2 fit
+    // is pinned to the original shape instead of re-fitting the span sparse.
     auto makePiece = [&](float lo, float hi) {
         std::vector<TrimAction::SplineCtrl> piece;
-        auto push = [&](int pid, glm::vec2 p) {
+        std::vector<float> us;
+        auto push = [&](int pid, float u) {
+            glm::vec2 p = at(u);
             if (!piece.empty() && glm::length(piece.back().pos - p) < 1e-3f) return;
             piece.push_back({pid, p});
+            us.push_back(u);
         };
-        push(!closed && lo <= 0.0f ? cids.front() : -1, at(lo));
+        push(!closed && lo <= 0.0f ? cids.front() : -1, lo);
         for (int m = 0; m < (closed ? 2 : 1); ++m) {
             for (int c = 0; c < nCtrl; ++c) {
                 float u = static_cast<float>(cidx[c]) + static_cast<float>(m) * maxS;
-                if (u > lo + eps && u < hi - eps) push(cids[c], at(u));
+                if (u > lo + eps && u < hi - eps) push(cids[c], u);
             }
         }
-        push(!closed && hi >= maxS ? cids.back() : -1, at(hi));
+        push(!closed && hi >= maxS ? cids.back() : -1, hi);
+
+        // Insert pins between a cut end and its neighbour: the midpoint of the
+        // span by sample parameter, plus the two thirds when the span is over a
+        // third of the whole spline (lengths here are in sample units).
+        auto pinCutEnd = [&](int cutIndex) {
+            const int nb = cutIndex == 0 ? 1 : static_cast<int>(piece.size()) - 2;
+            if (nb < 0 || nb == cutIndex) return;
+            const float uCut = us[cutIndex], uNb = us[nb];
+            const float len = std::abs(uCut - uNb);
+            if (len <= eps) return;
+            const float ts[2] = {1.0f / 3.0f, 2.0f / 3.0f};
+            const int nT = len > maxS / 3.0f ? 2 : 1;
+            int ins = cutIndex == 0 ? 1 : cutIndex;
+            for (int i = 0; i < nT; ++i) {
+                // Keep piece order: at the front the points run cut -> neighbour,
+                // at the back neighbour -> cut, so the back walks the fractions
+                // from the neighbour side first.
+                const int k = (cutIndex == 0) ? i : (nT - 1 - i);
+                const float s = nT == 2 ? ts[k] : 0.5f;
+                const float u = uCut + (uNb - uCut) * s;
+                const glm::vec2 p = at(u);
+                if (glm::length(piece[ins - 1].pos - p) < 1e-3f) continue;
+                if (ins < static_cast<int>(piece.size()) &&
+                    glm::length(piece[ins].pos - p) < 1e-3f) continue;
+                piece.insert(piece.begin() + ins, {-1, p});
+                us.insert(us.begin() + ins, u);
+                ++ins;
+            }
+        };
+        if (!piece.empty() && piece.front().id < 0) pinCutEnd(0);
+        if (piece.size() > 1 && piece.back().id < 0)
+            pinCutEnd(static_cast<int>(piece.size()) - 1);
         return piece;
     };
 

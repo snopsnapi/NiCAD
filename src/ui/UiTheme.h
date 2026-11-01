@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdarg>
 
+#include "../touch_mode.h"
+
 namespace materializr {
 
 // Screen-space Y of the BOTTOM of any floating top chrome, or 0 when the layout
@@ -54,6 +56,9 @@ inline ImVec4 dimText() {
 // look: a wide viewport still lays every one of these out on a single line, so
 // this only ever changes what a too-narrow window does.
 inline void viewportBanner(const ImVec4& col, const char* fmt, ...) {
+    // Touch mode: no hover to read a banner with, and im-touch floats its
+    // chrome over the viewport - the banner would sit on the toolbar buttons.
+    if (touchMode()) return;
     // Below the layout's floating chrome when there is any - see
     // viewportTopChromeBottom. Screen coords for that case, because the chrome's
     // position is screen-space and this window's own origin is not.

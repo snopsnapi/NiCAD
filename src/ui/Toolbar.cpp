@@ -8,6 +8,7 @@
 #include "../plugin/PluginRegistry.h"
 #include "../plugin/PluginContext.h"
 #include "../plugin/Contributions.h"
+#include "../touch_mode.h"
 #include <imgui.h>
 #include <cmath>
 #include <BRep_Tool.hxx>
@@ -33,7 +34,9 @@ Toolbar::Toolbar() = default;
 // BeginItemTooltip handles the hover-delay; PushTextWrapPos gives us the
 // width cap (in pixels, roughly 28em at the current font size).
 void Toolbar::tip(const char* text) const {
-    if (!m_showTooltips) return;
+    // Touch: hover never ends, so a tooltip opened by a tap would linger over
+    // the UI - the layouts suppress button tooltips in touch mode.
+    if (!m_showTooltips || touchMode()) return;
     if (ImGui::BeginItemTooltip()) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
         ImGui::TextUnformatted(text);
