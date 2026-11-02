@@ -389,6 +389,8 @@ add_executable(materializr
     src/modeling/TrimSurfaceOp.cpp
     src/modeling/SurfaceEditOps.cpp
     src/modeling/StudioSplineOp.cpp
+    src/modeling/Form.cpp
+    src/modeling/FormOp.cpp
     src/modeling/Unfold.cpp
     src/modeling/SketchSolver.cpp
     src/modeling/AirfoilImport.cpp

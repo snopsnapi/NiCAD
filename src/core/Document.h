@@ -453,6 +453,17 @@ public:
     std::vector<int> getAllAxisIds() const;
     int axisCount() const;
 
+    // Fork: Form (T-spline-style) cages. Not saved with the project: each
+    // form is written by its FormOp on every replay, so history IS the store.
+    // The cage is Form::Cage::serialize() text.
+    int allocateFormId() { return m_nextFormId++; }
+    void setForm(int id, const std::string& cage);
+    void removeForm(int id);
+    const std::string* getForm(int id) const;
+    void setFormVisible(int id, bool visible);
+    bool isFormVisible(int id) const;
+    std::vector<int> getAllFormIds() const;
+
     // Clear everything
     void clear();
 
@@ -464,6 +475,9 @@ private:
     int findSketchIndex(int id) const;
     int findFolderIndex(int id) const;
 
+    struct FormEntry { std::string cage; bool visible = true; };
+    std::map<int, FormEntry> m_forms;
+    int m_nextFormId = 1;
     std::vector<BodyEntry> m_bodies;
     std::vector<PlaneEntry> m_planes;
     std::vector<RefImageEntry> m_refImages;

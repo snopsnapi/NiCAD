@@ -720,6 +720,8 @@ void Document::clear() {
             m_eventBus->publish(materializr::AxisRemovedEvent{a.id});
     }
     m_bodies.clear();
+    m_forms.clear();
+    m_nextFormId = 1;
     m_planes.clear();
     m_refImages.clear();
     m_meshTraces.clear();
@@ -921,6 +923,29 @@ void Document::removeMate(int id) {
         m_mates.erase(m_mates.begin() + i);
         return;
     }
+}
+
+void Document::setForm(int id, const std::string& cage) {
+    if (id >= m_nextFormId) m_nextFormId = id + 1;
+    m_forms[id].cage = cage;
+}
+void Document::removeForm(int id) { m_forms.erase(id); }
+const std::string* Document::getForm(int id) const {
+    auto it = m_forms.find(id);
+    return it == m_forms.end() ? nullptr : &it->second.cage;
+}
+void Document::setFormVisible(int id, bool visible) {
+    auto it = m_forms.find(id);
+    if (it != m_forms.end()) it->second.visible = visible;
+}
+bool Document::isFormVisible(int id) const {
+    auto it = m_forms.find(id);
+    return it != m_forms.end() && it->second.visible;
+}
+std::vector<int> Document::getAllFormIds() const {
+    std::vector<int> ids;
+    for (const auto& [id, e] : m_forms) ids.push_back(id);
+    return ids;
 }
 
 void Document::clearMateBase(int bodyId) {

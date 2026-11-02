@@ -5,6 +5,7 @@
 #include "TrimSurfaceOp.h"
 #include "SurfaceEditOps.h"
 #include "StudioSplineOp.h"
+#include "FormOp.h"
 #include "LoftOp.h"
 #include "GuidedLoftOp.h"
 #include "BoundaryFillOp.h"
@@ -70,6 +71,8 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "extend_surface")  return std::make_unique<ExtendSurfaceOp>();
     if (typeId == "offset_surface")  return std::make_unique<OffsetSurfaceOp>();
     if (typeId == "studio_spline")   return std::make_unique<StudioSplineOp>();
+    if (typeId == "form")            return std::make_unique<FormOp>();
+    if (typeId == "convert_form")    return std::make_unique<ConvertFormOp>();
     if (typeId == "pushpull") return std::make_unique<PushPullOp>();
     if (typeId == "moveface") return std::make_unique<MoveFaceOp>();
     if (typeId == "combine_sketches") return std::make_unique<CombineSketchesOp>();
