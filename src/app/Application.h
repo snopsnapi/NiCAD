@@ -100,6 +100,7 @@ class PluginContext;
 class Document;
 class History;
 class SelectionManager;
+enum class SelectionType;   // core/SelectionManager.h (opaque: underlying int)
 class ThreadOp;
 class PushPullOp;
 
@@ -1282,6 +1283,26 @@ private:
     // Fork: Fusion-style workspace tab of the im-touch tool rail
     // (0 = Solid, 1 = Surface; Form later). Persisted.
     int m_imTouchWorkspace = 0;
+    // Fork: command-first (Fusion-style) workspace rail. A tapped command
+    // whose input isn't selected yet WAITS here: viewport taps are filtered
+    // to `typeMask` (bit = 1 << SelectionType) and toggle additively; the
+    // prompt bar's OK (or the first pick, for `single`) fires it.
+    struct PendingCommand {
+        bool active = false;
+        const char* label = "";
+        int action = 0;           // ToolAction, or 0 with a plugin
+        const char* plugin = nullptr;
+        unsigned typeMask = 0;
+        int minCount = 1;
+        bool single = false;
+    };
+    PendingCommand m_pendingCmd;
+    bool pendingAllows(SelectionType t) const;
+    int pendingMatchCount() const;
+    void startWorkspaceCommand(const PendingCommand& cmd);
+    void firePendingCommand();
+    void cancelPendingCommand() { m_pendingCmd = PendingCommand(); }
+    void renderPendingCommandBar();
     // im-touch timeline: step whose properties popup is open (-1 = none).
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.

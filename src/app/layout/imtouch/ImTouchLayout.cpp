@@ -23,6 +23,7 @@
 #include "ui/UiTheme.h"                 // viewportTopChromeBottom
 #include "modeling/SketchTool.h"   // SketchToolMode for the select-mode gate
 #include "plugin/PluginContext.h"
+#include "plugin/PluginRegistry.h"   // command-first rail: plugin by name
 #include "ui/HistoryPanel.h"
 #include "ui/MaterialPicker.h"
 #include "ui/Toolbar.h"       // ToolAction for the tool-bar entries
@@ -81,6 +82,142 @@ const char* stepIcon(const std::string& t) {
         t == "sketchtransform" || t == "align")
                                            return MZ_ICON_MOVE;
     return MZ_ICON_EDIT;
+}
+
+// ── Fork: command-first workspace rail ────────────────────────────────────
+// Selection-type bits for WsCmd::mask (bit = 1 << SelectionType).
+constexpr unsigned kSelB = 1u << static_cast<unsigned>(SelectionType::Body);
+constexpr unsigned kSelF = 1u << static_cast<unsigned>(SelectionType::Face);
+constexpr unsigned kSelE = 1u << static_cast<unsigned>(SelectionType::Edge);
+constexpr unsigned kSelS = 1u << static_cast<unsigned>(SelectionType::Sketch);
+constexpr unsigned kSelR = 1u << static_cast<unsigned>(SelectionType::SketchRegion);
+constexpr unsigned kSelP = 1u << static_cast<unsigned>(SelectionType::Plane);
+constexpr unsigned kSelA = 1u << static_cast<unsigned>(SelectionType::Axis);
+
+// One rail command: a ToolAction, or a plugin contribution by name. minCount
+// 0 = no input (fires at once); single = fires on the first matching pick.
+struct WsCmd {
+    const char* icon;
+    const char* label;
+    ToolAction action;
+    const char* plugin;
+    unsigned mask;
+    int minCount;
+    bool single;
+};
+// label == nullptr: the commands sit flat on the rail; otherwise a flyout.
+struct WsGroup {
+    const char* label;
+    const char* icon;
+    std::vector<WsCmd> cmds;
+};
+
+const WsCmd kCmdSketch  {MZ_ICON_SKETCH,  "Sketch",  ToolAction::SketchOnFace, nullptr, kSelF | kSelP, 1, true};
+const WsCmd kCmdMove    {MZ_ICON_MOVE,    "Move",    ToolAction::Move, nullptr,
+                         kSelB | kSelF | kSelE | kSelS | kSelR | kSelP | kSelA, 1, false};
+const WsCmd kCmdMirror  {MZ_ICON_MIRROR,  "Mirror",  ToolAction::Mirror, nullptr, kSelB, 1, false};
+const WsCmd kCmdSplit   {MZ_ICON_SPLIT,   "Split",   ToolAction::Split, nullptr, kSelB, 1, true};
+const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", kSelS | kSelR | kSelF, 2, false};
+const WsCmd kCmdRemove  {MZ_ICON_REPAIR,  "Remove",  ToolAction::RemoveFace, nullptr, kSelF, 1, false};
+const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::None, "Delete", kSelB, 1, false};
+const WsCmd kCmdMeasure {MZ_ICON_MEASURE, "Measure", ToolAction::Measure, nullptr, 0, 0, false};
+
+const std::vector<WsGroup>& solidWorkspace() {
+    static const std::vector<WsGroup> g = {
+        {nullptr, nullptr, {
+            kCmdSketch,
+            {MZ_ICON_EXTRUDE,  "Extrude", ToolAction::ExtrudeSketch, nullptr, kSelS | kSelR | kSelF, 1, false},
+            {MZ_ICON_PUSHPULL, "Push",    ToolAction::PushPull, nullptr, kSelR | kSelF, 1, true},
+            {MZ_ICON_FILLET,   "Fillet",  ToolAction::Fillet, nullptr, kSelE, 1, false},
+            {MZ_ICON_CHAMFER,  "Chamfer", ToolAction::Chamfer, nullptr, kSelE, 1, false},
+        }},
+        {"Create", MZ_ICON_LATHE, {
+            {MZ_ICON_LATHE,    "Revolve", ToolAction::Revolve, nullptr, kSelS | kSelR, 1, true},
+            kCmdLoft,
+        }},
+        {"Modify", MZ_ICON_SHELL, {
+            {MZ_ICON_SHELL,    "Shell",       ToolAction::Shell, nullptr, kSelF, 1, false},
+            {MZ_ICON_SPLIT,    "Draft",       ToolAction::Taper, nullptr, kSelF, 1, false},
+            {MZ_ICON_PUSHPULL, "Offset Face", ToolAction::OffsetFace, nullptr, kSelF, 1, false},
+            {MZ_ICON_SCALE,    "Scale Face",  ToolAction::ScaleFace, nullptr, kSelF, 1, true},
+            {MZ_ICON_THREAD,   "Thread",      ToolAction::Thread, nullptr, kSelF, 1, true},
+            kCmdRemove,
+        }},
+        {"Combine", MZ_ICON_UNION, {
+            {MZ_ICON_UNION,     "Union",     ToolAction::None, "Union", kSelB, 2, false},
+            {MZ_ICON_SUBTRACT,  "Subtract",  ToolAction::None, "Subtract", kSelB, 2, false},
+            {MZ_ICON_INTERSECT, "Intersect", ToolAction::None, "Intersect", kSelB, 2, false},
+        }},
+        {nullptr, nullptr, { kCmdMove }},
+        {"Pattern", MZ_ICON_COPY, {
+            {MZ_ICON_COPY,             "Duplicate", ToolAction::None, "Duplicate", kSelB, 1, false},
+            kCmdMirror,
+            {MZ_ICON_PATTERN_LINEAR,   "Linear",    ToolAction::None, "Linear Pattern", kSelB, 1, false},
+            {MZ_ICON_PATTERN_CIRCULAR, "Circular",  ToolAction::None, "Circular Pattern", kSelB, 1, false},
+            {MZ_ICON_SCALE,            "Scale",     ToolAction::Scale, nullptr, kSelB, 1, false},
+            kCmdSplit,
+        }},
+        {nullptr, nullptr, { kCmdDelete, kCmdMeasure }},
+    };
+    return g;
+}
+
+const std::vector<WsGroup>& surfaceWorkspace() {
+    static const std::vector<WsGroup> g = {
+        {nullptr, nullptr, {
+            kCmdSketch,
+            kCmdLoft,
+            {MZ_ICON_PATCH, "Patch", ToolAction::None, "Patch", kSelE, 1, false},
+            {MZ_ICON_SEW,   "Sew",   ToolAction::None, "Sew", kSelB, 1, false},
+            kCmdRemove,
+            kCmdSplit,
+            kCmdMove,
+            kCmdMirror,
+            kCmdDelete,
+            kCmdMeasure,
+        }},
+    };
+    return g;
+}
+
+// Does the workspace rail already carry this catalogue tool?
+bool wsCovers(const std::vector<WsGroup>& groups, const Toolbar::RailTool& t) {
+    for (const WsGroup& g : groups)
+        for (const WsCmd& c : g.cmds) {
+            if (t.pluginIndex >= 0) {
+                if (c.plugin && t.label &&
+                    (std::strcmp(c.plugin, t.label) == 0 ||
+                     std::strcmp(c.label, t.label) == 0))
+                    return true;
+            } else if (c.action != ToolAction::None && c.action == t.action) {
+                return true;
+            }
+        }
+    return false;
+}
+
+bool surfaceOnlyTool(const Toolbar::RailTool& t) {
+    return t.pluginIndex >= 0 && t.label &&
+           (std::strcmp(t.label, "Patch") == 0 || std::strcmp(t.label, "Sew") == 0);
+}
+
+bool solidOnlyTool(const Toolbar::RailTool& t) {
+    if (t.pluginIndex >= 0)
+        return t.label && (std::strcmp(t.label, "Union") == 0 ||
+                           std::strcmp(t.label, "Subtract") == 0 ||
+                           std::strcmp(t.label, "Intersect") == 0);
+    switch (t.action) {
+    case ToolAction::ExtrudeSketch: case ToolAction::PushPull:
+    case ToolAction::SubtractSketch: case ToolAction::Shell:
+    case ToolAction::ScaleFace: case ToolAction::Taper:
+    case ToolAction::Fillet: case ToolAction::Chamfer:
+    case ToolAction::EditFilletChamfer: case ToolAction::Thread:
+    case ToolAction::EditDiameter: case ToolAction::OffsetFace:
+    case ToolAction::ProjectSketch: case ToolAction::MergeFaces:
+        return true;
+    default:
+        return false;
+    }
 }
 
 } // namespace
@@ -866,95 +1003,75 @@ void Application::renderImTouchLayout() {
             };
 
             if (!m_inSketchMode) {
-                // Body/feature context: most tools stay flat, but two flyouts
-                // (matching modern's rail):
-                //   Transform = Move + Rotate + Scale
-                //   Multiply  = Duplicate + Mirror + patterns + splits
-                // Everything else - including unrecognised future plugins -
-                // renders in catalogue order so nothing silently vanishes.
-                //   Repair    = Patch + Sew + Merge Faces + Remove Feature
-                // Its members come from four different selection contexts, so
-                // the flyout holds whichever are usable right now - and the
-                // group button doesn't appear at all when none are.
-                std::vector<const Toolbar::RailTool*> multiply, transform, repair;
-                int railIdx = 0;
+                // Fork: command-first workspace rail (Fusion-style). The
+                // workspace's commands are always on the rail; tapping one
+                // either runs it on a matching selection or waits for the
+                // user to pick its input (startWorkspaceCommand). The
+                // selection-specific tools the catalogue offers on top
+                // (Edit Sketch, Edit Fillet, Diameter, ...) sit in "More".
                 const bool surfaceWs = (m_imTouchWorkspace == 1);
-                for (const auto& t : tools) {
-                    // Fork: workspace tabs. Surface hides the solid-only
-                    // tools; Solid hides the surface-only ones. Everything
-                    // else (transform, copy, split, loft, remove, sketch,
-                    // measure, unknown plugins) shows in both.
-                    const bool surfaceOnly = t.pluginIndex >= 0 && t.label &&
-                        (std::strcmp(t.label, "Patch") == 0 ||
-                         std::strcmp(t.label, "Sew") == 0);
-                    bool solidOnly = false;
-                    if (t.pluginIndex >= 0) {
-                        solidOnly = t.label &&
-                            (std::strcmp(t.label, "Union") == 0 ||
-                             std::strcmp(t.label, "Subtract") == 0 ||
-                             std::strcmp(t.label, "Intersect") == 0);
-                    } else {
-                        switch (t.action) {
-                        case ToolAction::ExtrudeSketch:
-                        case ToolAction::PushPull:
-                        case ToolAction::SubtractSketch:
-                        case ToolAction::Shell:
-                        case ToolAction::ScaleFace:
-                        case ToolAction::Taper:
-                        case ToolAction::Fillet:
-                        case ToolAction::Chamfer:
-                        case ToolAction::EditFilletChamfer:
-                        case ToolAction::Thread:
-                        case ToolAction::EditDiameter:
-                        case ToolAction::OffsetFace:
-                        case ToolAction::ProjectSketch:
-                        case ToolAction::MergeFaces:
-                            solidOnly = true;
-                            break;
-                        default:
-                            break;
-                        }
+                const std::vector<WsGroup>& groups =
+                    surfaceWs ? surfaceWorkspace() : solidWorkspace();
+                int cmdIdx = 0;
+                auto cmdButton = [&](const WsCmd& c, bool inPopup) {
+                    ImGui::PushID(cmdIdx++);
+                    const bool pending = m_pendingCmd.active &&
+                        std::strcmp(m_pendingCmd.label, c.label) == 0;
+                    if (touchui::railButton(c.label, c.icon, tr(c.label),
+                                            pending, 64.0f * s)) {
+                        PendingCommand pc;
+                        pc.label = c.label;
+                        pc.action = static_cast<int>(c.action);
+                        pc.plugin = c.plugin;
+                        pc.typeMask = c.mask;
+                        pc.minCount = c.minCount;
+                        pc.single = c.single;
+                        startWorkspaceCommand(pc);
+                        if (inPopup) ImGui::CloseCurrentPopup();
                     }
-                    if (surfaceWs ? solidOnly : surfaceOnly) continue;
-                    // Surface: its core tools sit flat, not in Repair.
-                    if (surfaceWs && (surfaceOnly || t.action == ToolAction::RemoveFace)) {
-                        flatButton(t, railIdx++);
+                    ImGui::PopID();
+                };
+                for (const WsGroup& g : groups) {
+                    if (!g.label) {                 // flat commands
+                        for (const WsCmd& c : g.cmds) cmdButton(c, false);
                         continue;
                     }
-                    if (t.pluginIndex >= 0 && t.label) {
-                        if (std::strcmp(t.label, "Linear") == 0 ||
-                            std::strcmp(t.label, "Circular") == 0 ||
-                            std::strcmp(t.label, "Duplicate") == 0) {
-                            multiply.push_back(&t); continue;
+                    const char* shownIcon = g.icon;
+                    const char* shownLabel = g.label;
+                    bool anyPending = false;
+                    for (const WsCmd& c : g.cmds)
+                        if (m_pendingCmd.active &&
+                            std::strcmp(m_pendingCmd.label, c.label) == 0) {
+                            shownIcon = c.icon; shownLabel = c.label; anyPending = true;
                         }
-                        if (std::strcmp(t.label, "Patch") == 0 ||
-                            std::strcmp(t.label, "Sew") == 0) {
-                            repair.push_back(&t); continue;
+                    ImGui::PushID(g.label);
+                    if (touchui::railButton("grp", shownIcon, tr(shownLabel),
+                                            anyPending, 64.0f * s))
+                        ImGui::OpenPopup("##wsGroup");
+                    if (ImGui::BeginPopup("##wsGroup")) {
+                        int idx = 0;
+                        for (const WsCmd& c : g.cmds) {
+                            if (idx++ % 4 != 0) ImGui::SameLine(0.0f, 6.0f * s);
+                            cmdButton(c, true);
                         }
-                    } else if (t.action == ToolAction::Mirror ||
-                               t.action == ToolAction::Split) {
-                        multiply.push_back(&t); continue;
-                    } else if (t.action == ToolAction::Move ||
-                               t.action == ToolAction::Rotate ||
-                               t.action == ToolAction::Scale) {
-                        transform.push_back(&t); continue;
-                    } else if (t.action == ToolAction::MergeFaces ||
-                               t.action == ToolAction::RemoveFace) {
-                        repair.push_back(&t); continue;
+                        ImGui::EndPopup();
                     }
-                    flatButton(t, railIdx++);
+                    ImGui::PopID();
                 }
-                group("transformGroup", "##bodyTransform", MZ_ICON_MOVE,
-                      "Transform", "Move, rotate or scale the selection",
-                      transform);
-                group("multiplyGroup", "##bodyMultiply", MZ_ICON_COPY,
-                      "Multiply", "Copy, mirror, pattern or split the selection",
-                      multiply);
-                group("repairGroup", "##bodyRepair", MZ_ICON_REPAIR,
-                      "Repair", "Fix up geometry: fill an opening, stitch "
-                      "surfaces into a solid, merge split faces, or take a "
-                      "feature back off",
-                      repair);
+
+                // Selection-specific extras from the contextual catalogue:
+                // whatever it offers that the workspace rail doesn't already
+                // have, minus the other workspace's tools.
+                if (m_selection && m_selection->hasSelection() && !m_pendingCmd.active) {
+                    std::vector<const Toolbar::RailTool*> extras;
+                    for (const auto& t : tools) {
+                        if (wsCovers(groups, t)) continue;
+                        if (surfaceWs ? solidOnlyTool(t) : surfaceOnlyTool(t)) continue;
+                        extras.push_back(&t);
+                    }
+                    group("ctxMore", "##wsMore", MZ_ICON_MORE, "More",
+                          "Tools for the current selection", extras);
+                }
             } else {
                 // Sketch mode: the flat catalogue is ~19 buttons - a screen
                 // and a half of scrolling. The DRAWING tools stay flat (they're
@@ -1008,6 +1125,8 @@ void Application::renderImTouchLayout() {
     }
     ImGui::End();
     ImGui::PopStyleColor();
+
+    renderPendingCommandBar();   // fork: command-first rail
 
     // ── Bottom-right corner: in a sketch, the commit actions - an accent
     //    ✓ Finish FAB with a smaller ✗ Discard beside it (gap so a Finish tap
@@ -1491,6 +1610,126 @@ void Application::renderImTouchLayout() {
     }
 
     ImGui::PopStyleVar(2); // WindowRounding + WindowBorderSize
+}
+
+// ── Fork: command-first workspace rail ──────────────────────────────────────
+
+bool Application::pendingAllows(SelectionType t) const {
+    return !m_pendingCmd.active ||
+           (m_pendingCmd.typeMask & (1u << static_cast<unsigned>(t))) != 0;
+}
+
+int Application::pendingMatchCount() const {
+    if (!m_selection) return 0;
+    int n = 0;
+    for (const auto& e : m_selection->getSelection())
+        if (m_pendingCmd.typeMask & (1u << static_cast<unsigned>(e.type))) ++n;
+    return n;
+}
+
+void Application::startWorkspaceCommand(const PendingCommand& cmd) {
+    cancelPendingCommand();
+    m_pendingCmd = cmd;
+    m_pendingCmd.active = true;
+    if (cmd.minCount <= 0) { firePendingCommand(); return; }
+    // Keep only what this command takes; a matching preselection runs it at
+    // once (Fusion accepts a preselection too).
+    if (m_selection) {
+        std::vector<SelectionEntry> drop;
+        for (const auto& e : m_selection->getSelection())
+            if (!(cmd.typeMask & (1u << static_cast<unsigned>(e.type))))
+                drop.push_back(e);
+        for (const auto& e : drop) m_selection->removeFromSelection(e);
+        m_selection->setNavigationOnly(false);
+    }
+    if (pendingMatchCount() >= cmd.minCount) firePendingCommand();
+}
+
+void Application::firePendingCommand() {
+    const PendingCommand c = m_pendingCmd;
+    cancelPendingCommand();
+    if (c.plugin) {
+        if (!m_toolbar) return;
+        const auto& contribs = PluginRegistry::instance().toolbarContributions();
+        for (size_t i = 0; i < contribs.size(); ++i)
+            if (contribs[i].name == c.plugin) {
+                m_toolbar->fireRailPlugin(static_cast<int>(i));
+                return;
+            }
+        return;
+    }
+    handleToolAction(c.action);
+}
+
+// The waiting command's bar, top-centre under the chrome: its name, the pick
+// count, Cancel and OK. Sketch also offers the three origin planes.
+void Application::renderPendingCommandBar() {
+    if (!m_pendingCmd.active) return;
+    if (m_inSketchMode || anyInteractivePreviewActive()) {
+        cancelPendingCommand();
+        return;
+    }
+    const int count = pendingMatchCount();
+    if (m_pendingCmd.single && count >= 1) {
+        firePendingCommand();
+        return;
+    }
+    const float s = uiScale();
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float m = 12.0f * s;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                                   vp->WorkPos.y + m + 52.0f * s),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.95f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, touchui::panelBg());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f * s, 8.0f * s));
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus;
+    bool ok = false, cancel = false;
+    int originPlane = -1;
+    if (ImGui::Begin("##PendingCmd", nullptr, flags)) {
+        const float side = 44.0f * s;
+        const float textY = ImGui::GetCursorPosY() + (side - ImGui::GetFontSize()) * 0.5f;
+        ImGui::SetCursorPosY(textY);
+        ImGui::TextColored(touchui::textPrimary(), "%s", materializr::tr(m_pendingCmd.label));
+        ImGui::SameLine(0.0f, 12.0f * s);
+        ImGui::SetCursorPosY(textY);
+        ImGui::TextColored(touchui::textDim(), materializr::tr("%d selected"), count);
+        ImGui::SameLine(0.0f, 16.0f * s);
+        ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
+        if (m_pendingCmd.action == static_cast<int>(ToolAction::SketchOnFace)) {
+            static const char* const kPlanes[3] = { "XY", "XZ", "YZ" };
+            for (int i = 0; i < 3; ++i) {
+                if (ImGui::Button(kPlanes[i], ImVec2(side * 1.2f, side))) originPlane = i;
+                ImGui::SameLine(0.0f, 6.0f * s);
+            }
+            ImGui::SameLine(0.0f, 10.0f * s);
+        }
+        cancel = touchui::iconButton("pcCancel", MZ_ICON_DISCARD, side);
+        if (!m_pendingCmd.single) {
+            ImGui::SameLine(0.0f, 10.0f * s);
+            ImGui::BeginDisabled(count < m_pendingCmd.minCount);
+            ok = touchui::iconButton("pcOk", MZ_ICON_FINISH, side);
+            ImGui::EndDisabled();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (originPlane >= 0) {
+        cancelPendingCommand();
+        const ToolAction a = originPlane == 0 ? ToolAction::StartSketchXY
+                           : originPlane == 1 ? ToolAction::StartSketchXZ
+                                              : ToolAction::StartSketchYZ;
+        handleToolAction(static_cast<int>(a));
+    } else if (cancel) {
+        cancelPendingCommand();
+    } else if (ok) {
+        firePendingCommand();
+    }
 }
 
 } // namespace materializr

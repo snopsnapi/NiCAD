@@ -5774,13 +5774,16 @@ void Application::renderViewport() {
                             : ImGui::IsMouseClicked(ImGuiMouseButton_Left);
                     (void)_tapSelX; (void)_tapSelY;
                     bool regionConsumedClick = false;
+                    // Fork: a command waiting for its input (command-first
+                    // rail) takes only its own selection types, additively.
+                    const bool pendingPick = m_pendingCmd.active;
                     if (clickSelectionAllowed && regionHit.regionIndex >= 0 &&
-                        selectClicked) {
+                        selectClicked && pendingAllows(SelectionType::SketchRegion)) {
                         SelectionEntry entry;
                         entry.type = SelectionType::SketchRegion;
                         entry.sketchId = regionHit.sketchId;
                         entry.subShapeIndex = regionHit.regionIndex;
-                        if (io.KeyCtrl || m_projectSketchCtl.active()) {
+                        if (io.KeyCtrl || m_projectSketchCtl.active() || pendingPick) {
                             // Toggle: Ctrl+clicking an already-selected
                             // region deselects it - fixing a bad pick in a
                             // multi-region selection shouldn't mean starting
@@ -5806,7 +5809,7 @@ void Application::renderViewport() {
                     // sits in front of the edge.
                     else if (clickSelectionAllowed &&
                              regionHit.regionIndex < 0 && regionHit.sketchId >= 0 &&
-                             selectClicked) {
+                             selectClicked && pendingAllows(SelectionType::Sketch)) {
                         // Same generous occlusion tolerance + source-face
                         // exemption as the region branch above - sketches on
                         // body faces are coplanar by intent.
@@ -5842,7 +5845,7 @@ void Application::renderViewport() {
                             SelectionEntry entry;
                             entry.type = SelectionType::Sketch;
                             entry.sketchId = regionHit.sketchId;
-                            if (io.KeyCtrl) {
+                            if (io.KeyCtrl || pendingPick) {
                                 m_selection->addToSelection(entry);
                             } else {
                                 m_selection->select(entry);
@@ -5957,7 +5960,8 @@ void Application::renderViewport() {
                     const bool bodyEscalate = touchDbl ||
                         (!materializr::touchMode() &&
                          ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
-                    if (clickSelectionAllowed && !regionConsumedClick && bodyEscalate) {
+                    if (clickSelectionAllowed && !regionConsumedClick && bodyEscalate &&
+                        pendingAllows(SelectionType::Body)) {
                         // Touch: ImGui's 2nd-tap click can arrive a few frames after
                         // this escalation (its mouse queue lags Window's raw finger
                         // events); ignore face-select clicks briefly so it can't
@@ -5978,7 +5982,7 @@ void Application::renderViewport() {
                         entry.type = SelectionType::Body;
                         entry.bodyId = dbid;
                         try { entry.shape = m_document->getBody(dbid); } catch (...) {}
-                        if (io.KeyCtrl) {
+                        if (io.KeyCtrl || pendingPick) {
                             // Replace this body's faces/edges with the body itself -
                             // keep other selected items, no stray faces.
                             std::vector<SelectionEntry> drop;
@@ -6015,7 +6019,8 @@ void Application::renderViewport() {
                             SelectionEntry entry;
                             entry.type = SelectionType::Axis;
                             entry.axisId = result.axisId;
-                            if (io.KeyCtrl) m_selection->toggleSelection(entry);
+                            if (!pendingAllows(SelectionType::Axis)) {}
+                            else if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else            m_selection->select(entry);
                         } else if (result.hit && result.planeId >= 0) {
                             // Construction-plane hit takes its own selection path -
@@ -6023,7 +6028,8 @@ void Application::renderViewport() {
                             SelectionEntry entry;
                             entry.type = SelectionType::Plane;
                             entry.planeId = result.planeId;
-                            if (io.KeyCtrl) m_selection->toggleSelection(entry);
+                            if (!pendingAllows(SelectionType::Plane)) {}
+                            else if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else            m_selection->select(entry);
                         } else if (result.hit) {
                             SelectionEntry entry;
@@ -6052,7 +6058,9 @@ void Application::renderViewport() {
                             bool vertexClickHandled = false;
                             if (!result.nearestVertex.IsNull() &&
                                 result.vertexScreenDist < vertexThresh &&
-                                result.bodyId >= 0) {
+                                result.bodyId >= 0 &&
+                                (!pendingPick || (pendingAllows(SelectionType::Edge) &&
+                                                  !pendingAllows(SelectionType::Face)))) {
                                 try {
                                     const TopoDS_Shape& bodyShape =
                                         m_document->getBody(result.bodyId);
@@ -6063,7 +6071,7 @@ void Application::renderViewport() {
                                         const TopTools_ListOfShape& edges =
                                             vMap.FindFromKey(result.nearestVertex);
                                         if (!edges.IsEmpty()) {
-                                            if (!io.KeyCtrl) m_selection->clear();
+                                            if (!io.KeyCtrl && !pendingPick) m_selection->clear();
                                             for (const TopoDS_Shape& e : edges) {
                                                 SelectionEntry ee;
                                                 ee.type = SelectionType::Edge;
@@ -6125,7 +6133,42 @@ void Application::renderViewport() {
                                         }
                                     }
                                 }
-                                if (io.KeyCtrl) {
+                                // Fork: a waiting command re-reads the tap as
+                                // the type it takes - a face tap means its
+                                // nearest edge for Fillet, its body for
+                                // Mirror - and ignores what it can't use.
+                                bool pendingSkip = false;
+                                if (pendingPick && !pendingAllows(entry.type)) {
+                                    ownerStep = -1;
+                                    if (pendingAllows(SelectionType::Edge) &&
+                                        !result.nearestEdge.IsNull()) {
+                                        entry = SelectionEntry();
+                                        entry.type = SelectionType::Edge;
+                                        entry.bodyId = result.bodyId;
+                                        entry.shape = result.nearestEdge;
+                                    } else if (pendingAllows(SelectionType::Face) &&
+                                               !result.pickedShape.IsNull() &&
+                                               result.pickedShape.ShapeType() == TopAbs_FACE) {
+                                        entry = SelectionEntry();
+                                        entry.type = SelectionType::Face;
+                                        entry.bodyId = result.bodyId;
+                                        entry.subShapeIndex = result.faceIndex;
+                                        entry.shape = result.pickedShape;
+                                    } else if (pendingAllows(SelectionType::Body) &&
+                                               result.bodyId >= 0) {
+                                        entry = SelectionEntry();
+                                        entry.type = SelectionType::Body;
+                                        entry.bodyId = result.bodyId;
+                                        try { entry.shape = m_document->getBody(result.bodyId); }
+                                        catch (...) {}
+                                    } else {
+                                        pendingSkip = true;
+                                    }
+                                }
+                                if (pendingPick) ownerStep = -1;
+                                if (pendingSkip) {
+                                    // nothing this command can take
+                                } else if (io.KeyCtrl || pendingPick) {
                                     // Toggle so a Ctrl+click on something
                                     // already selected deselects just that
                                     // one (matches the plane / axis paths
@@ -6157,7 +6200,16 @@ void Application::renderViewport() {
                             entry.type = SelectionType::Edge;
                             entry.bodyId = result.bodyId;
                             entry.shape = result.nearestEdge;
-                            if (io.KeyCtrl) m_selection->toggleSelection(entry);
+                            if (pendingPick && !pendingAllows(SelectionType::Edge)) {
+                                if (pendingAllows(SelectionType::Body) && result.bodyId >= 0) {
+                                    entry = SelectionEntry();
+                                    entry.type = SelectionType::Body;
+                                    entry.bodyId = result.bodyId;
+                                    try { entry.shape = m_document->getBody(result.bodyId); }
+                                    catch (...) {}
+                                    m_selection->toggleSelection(entry);
+                                }
+                            } else if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else            m_selection->select(entry);
                             ImVec2 mpE = ImGui::GetMousePos();
                             m_pickCyclePos = glm::vec2(mpE.x, mpE.y);
@@ -6173,7 +6225,8 @@ void Application::renderViewport() {
                             // where the aperture rings converge). Do NOTHING -
                             // don't clear the region set, don't box-select. The
                             // "Clear" button is the deliberate reset.
-                            const bool projecting = m_projectSketchCtl.active();
+                            // A waiting command keeps its picks on a miss too.
+                            const bool projecting = m_projectSketchCtl.active() || pendingPick;
                             bool boxEligible = !m_inSketchMode && !m_extrudeCtl.active() &&
                                 !m_ppCtl.active() && !m_edgeCtl.active() && !m_gizmoDragging &&
                                 !projecting &&
