@@ -41,6 +41,7 @@
 #include "app/SplitController.h"
 #include "app/TrimSurfaceController.h"
 #include "app/SurfaceEditControllers.h"
+#include "app/StudioSplineController.h"
 #include "app/LiveOpPreview.h"
 #include "app/CylindricalPick.h"
 #include "app/KeyBindings.h"
@@ -1305,6 +1306,25 @@ private:
     void firePendingCommand();
     void cancelPendingCommand() { m_pendingCmd = PendingCommand(); }
     void renderPendingCommandBar();
+
+    // ── Fork: Studio Spline (3D curve) points (Application_Curve3D.cpp) ──
+    // Points of every applied, visible StudioSplineOp; selectable as
+    // SelectionType::CurvePoint and moved by the regular Move gizmo.
+    struct CurvePointRef { int step = -1; int bodyId = -1; int index = -1; glm::vec3 p{0.0f}; };
+    std::vector<CurvePointRef> curvePoints() const;
+    // Nearest point within `radiusPx` of window-local (x, y); false if none.
+    bool pickCurvePoint(float x, float y, float vpW, float vpH, float radiusPx,
+                        CurvePointRef& out) const;
+    bool hasSelectedCurvePoints() const;
+    glm::vec3 selectedCurvePointsCentre() const;
+    // Gizmo drag of the selected curve points: capture, live preview with a
+    // transform about the shared pivot, commit = replay history from the
+    // earliest touched step.
+    struct CurveDragPt { int step; int index; gp_Pnt orig; };
+    std::vector<CurveDragPt> m_curveDrag;
+    void beginCurveDrag();
+    void applyCurveDrag(const gp_Trsf& t);
+    void commitCurveDrag();
     // im-touch timeline: step whose properties popup is open (-1 = none).
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.
@@ -1800,16 +1820,17 @@ private:
     TrimSurfaceController m_trimSurfaceCtl;   // fork: Surface workspace scissors
     ExtendSurfaceController m_extendSurfaceCtl;
     OffsetSurfaceController m_offsetSurfaceCtl;
+    StudioSplineController m_studioSplineCtl;
     // m_moveFaceCtl is declared up with its delegates; it joined this array
     // once its lifecycle overrides landed, so every generic loop - Esc/Enter
     // chains, single-flight, suppression, input/overlay/gizmo dispatch -
     // covers Move Face without a special case.
-    std::array<InteractiveOpController*, 15> m_iops{
+    std::array<InteractiveOpController*, 16> m_iops{
         &m_shellCtl, &m_taperCtl, &m_scaleFaceCtl, &m_projectSketchCtl,
         &m_defeatureCtl, &m_offsetFaceCtl, &m_resizeCylCtl, &m_moveFaceCtl,
         &m_extrudeCtl,
         &m_ppCtl, &m_edgeCtl, &m_splitCtl, &m_trimSurfaceCtl,
-        &m_extendSurfaceCtl, &m_offsetSurfaceCtl};
+        &m_extendSurfaceCtl, &m_offsetSurfaceCtl, &m_studioSplineCtl};
     IopContext iopContext();
     bool anyIopActive() const {
         for (auto* c : m_iops) if (c->active()) return true;

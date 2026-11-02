@@ -93,6 +93,7 @@ constexpr unsigned kSelS = 1u << static_cast<unsigned>(SelectionType::Sketch);
 constexpr unsigned kSelR = 1u << static_cast<unsigned>(SelectionType::SketchRegion);
 constexpr unsigned kSelP = 1u << static_cast<unsigned>(SelectionType::Plane);
 constexpr unsigned kSelA = 1u << static_cast<unsigned>(SelectionType::Axis);
+constexpr unsigned kSelC = 1u << static_cast<unsigned>(SelectionType::CurvePoint);
 
 // One rail command: a ToolAction, or a plugin contribution by name. minCount
 // 0 = no input (fires at once); single = fires on the first matching pick.
@@ -114,7 +115,7 @@ struct WsGroup {
 
 const WsCmd kCmdSketch  {MZ_ICON_SKETCH,  "Sketch",  ToolAction::SketchOnFace, nullptr, kSelF | kSelP, 1, true};
 const WsCmd kCmdMove    {MZ_ICON_MOVE,    "Move",    ToolAction::Move, nullptr,
-                         kSelB | kSelF | kSelE | kSelS | kSelR | kSelP | kSelA, 1, false};
+                         kSelB | kSelF | kSelE | kSelS | kSelR | kSelP | kSelA | kSelC, 1, false};
 const WsCmd kCmdMirror  {MZ_ICON_MIRROR,  "Mirror",  ToolAction::Mirror, nullptr, kSelB, 1, false};
 const WsCmd kCmdSplit   {MZ_ICON_SPLIT,   "Split",   ToolAction::Split, nullptr, kSelB, 1, true};
 const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", kSelS | kSelR | kSelF, 2, false};
@@ -122,7 +123,7 @@ const WsCmd kCmdRemove  {MZ_ICON_REPAIR,  "Remove",  ToolAction::RemoveFace, nul
 const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::None, "Delete", kSelB, 1, false};
 const WsCmd kCmdMeasure {MZ_ICON_MEASURE, "Measure", ToolAction::Measure, nullptr, 0, 0, false};
 // Sweep: the profile sketch first, then the path sketch.
-const WsCmd kCmdSweep   {MZ_ICON_SPLINE,  "Sweep",   ToolAction::Sweep, nullptr, kSelS | kSelR, 2, false};
+const WsCmd kCmdSweep   {MZ_ICON_SPLINE,  "Sweep",   ToolAction::Sweep, nullptr, kSelS | kSelR | kSelB, 2, false};
 
 const std::vector<WsGroup>& solidWorkspace() {
     static const std::vector<WsGroup> g = {
@@ -169,6 +170,7 @@ const std::vector<WsGroup>& surfaceWorkspace() {
     static const std::vector<WsGroup> g = {
         {nullptr, nullptr, {
             kCmdSketch,
+            {MZ_ICON_SPLINE, "Spline 3D", ToolAction::StudioSpline, nullptr, 0, 0, false},
             {MZ_ICON_EXTRUDE, "Extrude", ToolAction::SurfaceExtrude, nullptr, kSelS | kSelR, 1, true},
             kCmdLoft,
             kCmdSweep,
@@ -325,9 +327,9 @@ void Application::renderImTouchLayout() {
                     if (e.type == t) ++n;
                 static const char* kNames[] = { "None", "Body", "Face", "Edge",
                                                 "Vertex", "Sketch", "Region",
-                                                "Plane", "Axis" };
+                                                "Plane", "Axis", "Point" };
                 const int ti = static_cast<int>(t);
-                if (ti > 0 && ti < 9) {
+                if (ti > 0 && ti < 10) {
                     sel = std::string("  ·  ") + kNames[ti] +
                           " (" + std::to_string(n) + ")";
                 }

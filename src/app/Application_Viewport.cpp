@@ -915,6 +915,15 @@ void Application::renderViewport() {
                 gizmoShown = true;
             } catch (...) {}
         }
+        // Fork: selected Studio Spline points get the Move gizmo at their
+        // centre (no body selected). Scale has no meaning for points.
+        if (!gizmoShown && hasSelectedCurvePoints() &&
+            !m_selection->navigationOnly() && !anyInteractiveOpActive) {
+            if (m_gizmo->getMode() == GizmoMode::Scale) m_gizmo->setCombinedMove();
+            m_gizmo->setPosition(selectedCurvePointsCentre());
+            m_gizmo->setVisible(true);
+            gizmoShown = true;
+        }
         // Sketch-as-construction-plane: when a Sketch OR a SketchRegion is
         // selected (no body in selection), not in sketch-edit, in perspective
         // view, show the gizmo at the parent sketch's plane origin so the
@@ -3039,6 +3048,25 @@ void Application::renderViewport() {
                 mdl->PopClipRect();
             }
 
+            // Fork: Studio Spline points - dots on every visible 3D curve
+            // (selected ones larger, in the selection yellow).
+            if (!m_inSketchMode) {
+                const float dp = uiScale();
+                const auto pts = curvePoints();
+                for (const auto& r : pts) {
+                    ImVec2 sp;
+                    if (!toImg(r.p, sp)) continue;
+                    bool sel = false;
+                    for (const auto& e : m_selection->getSelection())
+                        if (e.type == SelectionType::CurvePoint && e.bodyId == r.bodyId &&
+                            e.subShapeIndex == r.index) { sel = true; break; }
+                    const float rad = (sel ? 6.0f : 4.0f) * dp;
+                    dl->AddCircleFilled(sp, rad + 1.5f * dp, IM_COL32(20, 22, 30, 230));
+                    dl->AddCircleFilled(sp, rad, sel ? IM_COL32(255, 216, 26, 255)
+                                                     : IM_COL32(235, 240, 250, 255));
+                }
+            }
+
             // Dimension value labels - Distance / Radius / Angle constraints
             // get a numeric text overlay near their geometry so the user can
             // see (and later edit) the locked value. Free / undimensioned
@@ -4870,10 +4898,12 @@ void Application::renderViewport() {
                                 }
                             }
                         }
+                        beginCurveDrag();   // fork: Studio Spline points
                         if (!m_gizmoDragOriginals.empty() ||
                             !m_sketchGizmoDragSketches.empty() ||
                             !m_planeGizmoDrag.empty() ||
-                            !m_axisGizmoDrag.empty()) {
+                            !m_axisGizmoDrag.empty() ||
+                            !m_curveDrag.empty()) {
                             if (!m_gizmoDragOriginals.empty()) {
                                 m_gizmoDragBodyId = m_gizmoDragOriginals.front().first;
                                 m_gizmoDragOriginalShape = m_gizmoDragOriginals.front().second;
@@ -4967,6 +4997,10 @@ void Application::renderViewport() {
                                 m_gizmoSharedPivot += glm::vec3(a.origin.X(),
                                                                  a.origin.Y(),
                                                                  a.origin.Z());
+                                ++np;
+                            }
+                            for (const auto& c : m_curveDrag) {
+                                m_gizmoSharedPivot += glm::vec3(c.orig.X(), c.orig.Y(), c.orig.Z());
                                 ++np;
                             }
                             if (np > 0) m_gizmoSharedPivot /= static_cast<float>(np);
@@ -5089,6 +5123,7 @@ void Application::renderViewport() {
                                                 a.origin.Z() + d.z);
                                     m_document->setAxis(a.id, newO, a.direction);
                                 }
+                                applyCurveDrag(trsf);   // fork: curve points
                             } else if (gResult.mode == GizmoMode::Rotate) {
                                 glm::vec3 ad = axisDirOf(gResult.activeAxis);
                                 m_gizmoRotAxis = ad;
@@ -5122,6 +5157,7 @@ void Application::renderViewport() {
                                     pln.Transform(trsf);
                                     m_document->setPlane(pid, pln);
                                 }
+                                applyCurveDrag(trsf);   // fork: curve points
                             } else { // Scale - per-axis, non-uniform about the centre
                                 float os = static_cast<float>(glm::length(
                                     glm::vec3(ox2-ox1, oy2-oy1, oz2-oz1)));
@@ -5166,6 +5202,24 @@ void Application::renderViewport() {
                         // document and the partial remesh redraws the bodies at
                         // their committed pose.
                         gizmoPreviewReset();
+                        // Fork: Studio Spline points - final pose (typed values
+                        // never ran a live frame), then replay from the curve.
+                        if (!m_curveDrag.empty()) {
+                            gp_Trsf ct;
+                            const glm::vec3& pv = m_gizmoSharedPivot;
+                            if (m_gizmo->getMode() == GizmoMode::Rotate) {
+                                const glm::vec3 ax = m_gizmoRotAxis;
+                                if (glm::length(ax) > 1e-6f)
+                                    ct.SetRotation(gp_Ax1(gp_Pnt(pv.x, pv.y, pv.z),
+                                                          gp_Dir(ax.x, ax.y, ax.z)),
+                                                   m_gizmoTotalAngle * M_PI / 180.0);
+                            } else {
+                                const glm::vec3 d = m_gizmoTotalDelta;
+                                ct.SetTranslation(gp_Vec(d.x, d.y, d.z));
+                            }
+                            applyCurveDrag(ct);
+                            commitCurveDrag();
+                        }
                         try {
                             GizmoMode gm = m_gizmo->getMode();
                             const size_t nBodies = m_gizmoDragOriginals.size();
@@ -5777,7 +5831,24 @@ void Application::renderViewport() {
                     // Fork: a command waiting for its input (command-first
                     // rail) takes only its own selection types, additively.
                     const bool pendingPick = m_pendingCmd.active;
-                    if (clickSelectionAllowed && regionHit.regionIndex >= 0 &&
+                    // Fork: Studio Spline points win a tap near them (a
+                    // fingertip radius) over everything behind.
+                    if (clickSelectionAllowed && selectClicked &&
+                        pendingAllows(SelectionType::CurvePoint)) {
+                        CurvePointRef cp;
+                        if (pickCurvePoint(localX, localY, contentSize.x, contentSize.y,
+                                           24.0f * uiScale(), cp)) {
+                            SelectionEntry entry;
+                            entry.type = SelectionType::CurvePoint;
+                            entry.bodyId = cp.bodyId;
+                            entry.subShapeIndex = cp.index;
+                            if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
+                            else m_selection->select(entry);
+                            regionConsumedClick = true;
+                        }
+                    }
+                    if (!regionConsumedClick &&
+                        clickSelectionAllowed && regionHit.regionIndex >= 0 &&
                         selectClicked && pendingAllows(SelectionType::SketchRegion)) {
                         SelectionEntry entry;
                         entry.type = SelectionType::SketchRegion;
@@ -5807,7 +5878,7 @@ void Application::renderViewport() {
                     // can pick open vertical sketches that would otherwise be
                     // unpickable from the viewport. Skipped when a body face
                     // sits in front of the edge.
-                    else if (clickSelectionAllowed &&
+                    else if (!regionConsumedClick && clickSelectionAllowed &&
                              regionHit.regionIndex < 0 && regionHit.sketchId >= 0 &&
                              selectClicked && pendingAllows(SelectionType::Sketch)) {
                         // Same generous occlusion tolerance + source-face
