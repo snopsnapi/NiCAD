@@ -1537,7 +1537,8 @@ private:
     // Typed degrees already applied this session (the fields persist until the
     // tool closes, so Apply rotates by field - applied). Revert pops m_rotateSteps.
     float m_multiRotateApplied[3] = {0.0f, 0.0f, 0.0f};
-    struct TypedRotateStep { int before; int after; float delta[3]; };
+    // rot: the combined Move panel's rotation part of that Apply (degrees).
+    struct TypedRotateStep { int before; int after; float delta[3]; float rot[3] = {0, 0, 0}; };
     std::vector<TypedRotateStep> m_rotateSteps;
     bool m_rotatePending = false;   // an Apply is draining through the commit path
     int  m_rotatePendingBefore = -1;
@@ -1552,6 +1553,11 @@ private:
     bool m_movePending = false;
     int  m_movePendingBefore = -1;
     float m_movePendingDelta[3] = {0.0f, 0.0f, 0.0f};
+    // Fork: rotation fields of the combined (Fusion-style) Move panel, per
+    // user axis, degrees; same field/applied scheme as m_multiMove.
+    float m_moveRot[3] = {0.0f, 0.0f, 0.0f};
+    float m_moveRotApplied[3] = {0.0f, 0.0f, 0.0f};
+    float m_movePendingRot[3] = {0.0f, 0.0f, 0.0f};
     bool m_gizmoAngleExact = false; // committing a typed angle: bypass drag snapping
     // Accumulated delta from drag start (translate only). Used so snap-to-grid
     // can snap the absolute position rather than each per-frame increment.

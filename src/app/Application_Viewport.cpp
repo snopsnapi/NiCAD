@@ -4801,10 +4801,21 @@ void Application::renderViewport() {
                     // SketchTransformOp per dragged sketch.
                     // A queued typed rotation runs through the same start -> commit path
                     // as a mouse drag (link detaching, undo and replay come for free).
-                    const bool typedRotate = !m_typedRotateQueue.empty() && !m_gizmoDragging &&
-                                             m_gizmo->getMode() == GizmoMode::Rotate;
+                    // Combined Move (fork) takes both queues: the move first,
+                    // the rotations on the following frames, each setting the
+                    // gizmo's effective mode so the commit applies it.
+                    const bool combinedGizmo = m_gizmo->isCombined();
                     const bool typedMove = !m_typedMoveQueue.empty() && !m_gizmoDragging &&
-                                           m_gizmo->getMode() == GizmoMode::Translate;
+                                           (combinedGizmo ||
+                                            m_gizmo->getMode() == GizmoMode::Translate);
+                    const bool typedRotate = !m_typedRotateQueue.empty() && !m_gizmoDragging &&
+                                             !typedMove &&
+                                             (combinedGizmo ||
+                                              m_gizmo->getMode() == GizmoMode::Rotate);
+                    if (combinedGizmo) {
+                        if (typedMove) m_gizmo->setEffectiveMode(GizmoMode::Translate);
+                        else if (typedRotate) m_gizmo->setEffectiveMode(GizmoMode::Rotate);
+                    }
                     if ((gResult.activeAxis != GizmoAxis::None || typedRotate || typedMove) && !m_gizmoDragging) {
                         m_gizmoDragOriginals.clear();
                         m_sketchGizmoDragSketches.clear();

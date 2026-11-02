@@ -44,6 +44,29 @@ static constexpr float kCubeOffset = 1.05f;
 static constexpr int kSegments = 16;
 static constexpr int kRingSegments = 48;
 static constexpr float kPickThreshold = 0.04f;
+// Combined Move: plane squares between two axes, [kPlaneLo, kPlaneHi] along
+// each (inside the rotation rings, clear of the arrow shafts).
+static constexpr float kPlaneLo = 0.22f;
+static constexpr float kPlaneHi = 0.42f;
+
+// Local XY quad -> world plane: XY (normal Z), YZ (normal X), XZ (normal Y).
+static glm::mat4 planeRotation(GizmoAxis a) {
+    glm::mat4 m(1.0f);
+    if (a == GizmoAxis::YZ) {
+        m[0] = glm::vec4(0, 1, 0, 0); m[1] = glm::vec4(0, 0, 1, 0); m[2] = glm::vec4(1, 0, 0, 0);
+    } else if (a == GizmoAxis::XZ) {
+        m[0] = glm::vec4(0, 0, 1, 0); m[1] = glm::vec4(1, 0, 0, 0); m[2] = glm::vec4(0, 1, 0, 0);
+    }
+    return m;
+}
+static glm::vec3 planeNormal(GizmoAxis a) {
+    if (a == GizmoAxis::YZ) return glm::vec3(1, 0, 0);
+    if (a == GizmoAxis::XZ) return glm::vec3(0, 1, 0);
+    return glm::vec3(0, 0, 1);
+}
+static bool isPlaneAxis(GizmoAxis a) {
+    return a == GizmoAxis::XY || a == GizmoAxis::YZ || a == GizmoAxis::XZ;
+}
 
 // World-size factor the gizmo scales by (× camera distance). A fingertip is far
 // less precise than a cursor, so grow the whole widget on touch - the visual
@@ -63,6 +86,8 @@ Gizmo::~Gizmo() {
     if (m_ringVbo) glDeleteBuffers(1, &m_ringVbo);
     if (m_cubeVao) glDeleteVertexArrays(1, &m_cubeVao);
     if (m_cubeVbo) glDeleteBuffers(1, &m_cubeVbo);
+    if (m_planeVao) glDeleteVertexArrays(1, &m_planeVao);
+    if (m_planeVbo) glDeleteBuffers(1, &m_planeVbo);
 }
 
 bool Gizmo::initialize() {
@@ -96,10 +121,13 @@ bool Gizmo::initialize() {
     glGenBuffers(1, &m_ringVbo);
     glGenVertexArrays(1, &m_cubeVao);
     glGenBuffers(1, &m_cubeVbo);
+    glGenVertexArrays(1, &m_planeVao);
+    glGenBuffers(1, &m_planeVbo);
 
     buildArrowMesh();
     buildRingMesh();
     buildCubeMesh();
+    buildPlaneMesh();
     return true;
 }
 
@@ -230,7 +258,19 @@ void Gizmo::buildCubeMesh() {
     uploadMesh(m_cubeVao, m_cubeVbo, verts, m_cubeVertCount);
 }
 
-void Gizmo::setMode(GizmoMode mode) { m_mode = mode; }
+void Gizmo::buildPlaneMesh() {
+    // A flat square in the local XY plane between kPlaneLo and kPlaneHi on
+    // both axes; planeRotation() turns it into the XY / YZ / XZ handle.
+    const float a = kPlaneLo, b = kPlaneHi;
+    std::vector<float> verts = {
+        a, a, 0.0f,  b, a, 0.0f,  b, b, 0.0f,
+        a, a, 0.0f,  b, b, 0.0f,  a, b, 0.0f,
+    };
+    uploadMesh(m_planeVao, m_planeVbo, verts, m_planeVertCount);
+}
+
+void Gizmo::setMode(GizmoMode mode) { m_mode = mode; m_combined = false; }
+void Gizmo::setCombinedMove() { m_mode = GizmoMode::Translate; m_combined = true; }
 GizmoMode Gizmo::getMode() const { return m_mode; }
 void Gizmo::setPosition(glm::vec3 pos) { m_position = pos; }
 void Gizmo::setVisible(bool vis) { m_visible = vis; }
@@ -399,13 +439,23 @@ void Gizmo::render(const glm::mat4& view, const glm::mat4& projection) {
         {GizmoAxis::X, GizmoMode::Scale, {0.9f,0.2f,0.2f}, rotX, m_cubeVao, m_cubeVertCount},
         {GizmoAxis::Y, GizmoMode::Scale, {0.2f,0.9f,0.2f}, rotY, m_cubeVao, m_cubeVertCount},
         {GizmoAxis::Z, GizmoMode::Scale, {0.3f,0.4f,0.95f}, rotZ, m_cubeVao, m_cubeVertCount},
+        // Plane squares (combined Move only), coloured by their normal axis
+        {GizmoAxis::YZ, GizmoMode::Translate, {0.75f,0.2f,0.2f}, planeRotation(GizmoAxis::YZ), m_planeVao, m_planeVertCount},
+        {GizmoAxis::XZ, GizmoMode::Translate, {0.2f,0.75f,0.2f}, planeRotation(GizmoAxis::XZ), m_planeVao, m_planeVertCount},
+        {GizmoAxis::XY, GizmoMode::Translate, {0.25f,0.35f,0.8f}, planeRotation(GizmoAxis::XY), m_planeVao, m_planeVertCount},
     };
 
     glDisable(GL_DEPTH_TEST);
     glUseProgram(m_program);
 
     for (const auto& d : draws) {
-        if (d.mode != m_mode) continue; // only the active mode's handles
+        // Only the active mode's handles - except the combined Move gizmo,
+        // which shows arrows, rings and plane squares together (no cubes).
+        if (m_combined) {
+            if (d.mode == GizmoMode::Scale) continue;
+        } else if (d.mode != m_mode || isPlaneAxis(d.axis)) {
+            continue;
+        }
         glm::mat4 model = glm::translate(glm::mat4(1.0f), m_position)
                         * glm::scale(glm::mat4(1.0f), glm::vec3(scale))
                         * d.rotation;
@@ -456,7 +506,9 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
     // Only the active mode's handles are pickable - otherwise the long translate
     // arrow lines would steal clicks meant for the scale cubes / rotate rings.
     // Test translate arrows (line from origin to tip)
-    if (m_mode == GizmoMode::Translate)
+    const bool pickTranslate = m_combined || m_mode == GizmoMode::Translate;
+    const bool pickRotate = m_combined || m_mode == GizmoMode::Rotate;
+    if (pickTranslate)
     for (int i = 0; i < 3; i++) {
         glm::vec3 tip = m_position + axisDirs[i] * scale * (kAxisLength + kConeHeight);
         glm::vec2 tipNDC = worldToNDC(tip, vp);
@@ -469,7 +521,7 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
     }
 
     // Test scale cubes (small region around cube endpoint)
-    if (m_mode == GizmoMode::Scale)
+    if (!m_combined && m_mode == GizmoMode::Scale)
     for (int i = 0; i < 3; i++) {
         glm::vec3 cubePos = m_position + axisDirs[i] * scale * kCubeOffset;
         glm::vec2 cubeNDC = worldToNDC(cubePos, vp);
@@ -482,7 +534,7 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
     }
 
     // Test rotate rings (sample points along the arc)
-    if (m_mode == GizmoMode::Rotate) {
+    if (pickRotate) {
     glm::mat4 ringRots[3] = {
         glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0)),
         glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1,0,0)),
@@ -514,7 +566,39 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
             prevNDC = ptNDC;
         }
     }
-    } // m_mode == Rotate
+    } // pickRotate
+
+    // Plane squares (combined Move): a touch inside the projected square wins
+    // outright; near its centre counts like any other handle.
+    if (m_combined) {
+        const GizmoAxis planes[3] = {GizmoAxis::XY, GizmoAxis::YZ, GizmoAxis::XZ};
+        for (GizmoAxis pa : planes) {
+            const glm::mat4 rot = planeRotation(pa);
+            const float a = kPlaneLo, b = kPlaneHi;
+            const glm::vec3 local[4] = {{a, a, 0}, {b, a, 0}, {b, b, 0}, {a, b, 0}};
+            glm::vec2 q[4];
+            for (int k = 0; k < 4; ++k)
+                q[k] = worldToNDC(m_position + glm::vec3(rot * glm::vec4(local[k], 0.0f)) * scale, vp);
+            // Convex quad: inside when every edge sees the point on one side.
+            float sgn = 0.0f;
+            bool inside = true;
+            for (int k = 0; k < 4; ++k) {
+                const glm::vec2 e = q[(k + 1) % 4] - q[k];
+                const glm::vec2 w = mouse - q[k];
+                const float c = e.x * w.y - e.y * w.x;
+                if (std::abs(c) < 1e-12f) continue;
+                if (sgn == 0.0f) sgn = c;
+                else if ((c > 0.0f) != (sgn > 0.0f)) { inside = false; break; }
+            }
+            const glm::vec2 ctr = (q[0] + q[1] + q[2] + q[3]) * 0.25f;
+            const float d = inside ? 0.0f : glm::length(mouse - ctr);
+            if (d < best.dist) {
+                best.dist = d;
+                best.axis = pa;
+                best.mode = GizmoMode::Translate;
+            }
+        }
+    }
 
     return best;
 }
@@ -546,6 +630,26 @@ glm::vec3 Gizmo::projectOnAxis(float mx, float my, float vpW, float vpH,
     float t = (std::abs(denom) > 1e-8f) ? (b * e - c * d) / denom : 0.0f;
 
     return m_position + t * axisDir;
+}
+
+bool Gizmo::projectOnPlane(float mx, float my, float vpW, float vpH,
+                           const Camera& camera, GizmoAxis plane, glm::vec3& out) {
+    glm::mat4 invVP = glm::inverse(camera.getProjectionMatrix() * camera.getViewMatrix());
+    float ndcX = (mx / vpW) * 2.0f - 1.0f;
+    float ndcY = 1.0f - (my / vpH) * 2.0f;
+    glm::vec4 nearClip = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+    glm::vec4 farClip  = invVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+    glm::vec3 rayOrigin = glm::vec3(nearClip) / nearClip.w;
+    glm::vec3 rayDir = glm::normalize(glm::vec3(farClip) / farClip.w - rayOrigin);
+    const glm::vec3 n = planeNormal(plane);
+    const float denom = glm::dot(rayDir, n);
+    // Edge-on: the hit races off for a pixel of motion (same guard idea as
+    // ringAngle, a little looser - the plane handle is hidden there anyway).
+    if (std::abs(denom) < 0.08f) return false;
+    const float t = glm::dot(m_position - rayOrigin, n) / denom;
+    if (t <= 0.0f) return false;
+    out = rayOrigin + rayDir * t;
+    return true;
 }
 
 bool Gizmo::ringAngle(float mx, float my, float vpW, float vpH,
@@ -601,12 +705,18 @@ GizmoResult Gizmo::handleInput(float mouseX, float mouseY,
                 // baseline angle and reads as a huge spurious rotation.
                 started = ringAngle(mouseX, mouseY, vpWidth, vpHeight, camera,
                                      pick.axis, m_lastDragAngle);
+            } else if (isPlaneAxis(pick.axis)) {
+                started = projectOnPlane(mouseX, mouseY, vpWidth, vpHeight, camera,
+                                         pick.axis, m_lastDragPos);
             } else {
                 m_lastDragPos = projectOnAxis(mouseX, mouseY, vpWidth, vpHeight, camera, pick.axis);
             }
             if (started) {
                 m_draggingAxis = pick.axis;
                 m_draggingMode = pick.mode;
+                // Combined Move: the grabbed handle decides the effective
+                // mode until the next grab (the app commits after release).
+                if (m_combined) m_mode = pick.mode;
             }
         }
     }
@@ -628,6 +738,17 @@ GizmoResult Gizmo::handleInput(float mouseX, float mouseY,
                 result.activeAxis = m_draggingAxis;
                 result.mode = m_draggingMode;
                 result.delta = axisDir * dDeg;
+            }
+        } else if (isPlaneAxis(m_draggingAxis)) {
+            // Combined Move plane handle: free movement within the plane.
+            glm::vec3 currentPos;
+            if (projectOnPlane(mouseX, mouseY, vpWidth, vpHeight, camera,
+                               m_draggingAxis, currentPos)) {
+                result.changed = true;
+                result.activeAxis = m_draggingAxis;
+                result.mode = m_draggingMode;
+                result.delta = currentPos - m_lastDragPos;
+                m_lastDragPos = currentPos;
             }
         } else {
             // Translate / Scale: movement along the axis line.

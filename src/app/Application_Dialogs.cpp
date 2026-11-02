@@ -939,7 +939,9 @@ void Application::renderRotatePanel() {
         m_rotateSteps.clear();
         m_rotatePending = false;
     };
-    if (m_inSketchMode || !m_gizmo || m_gizmo->getMode() != GizmoMode::Rotate) {
+    // The combined Move gizmo has its rotation fields in the Move panel.
+    if (m_inSketchMode || !m_gizmo || m_gizmo->getMode() != GizmoMode::Rotate ||
+        m_gizmo->isCombined()) {
         endSession();
         return;
     }
@@ -1052,30 +1054,42 @@ void Application::renderRotatePanel() {
 // Standalone sketches keep their own panel (renderSketchMovePanel).
 void Application::renderMovePanel() {
     auto endSession = [&] {
-        for (int i = 0; i < 3; ++i) m_multiMove[i] = m_multiMoveApplied[i] = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            m_multiMove[i] = m_multiMoveApplied[i] = 0.0f;
+            m_moveRot[i] = m_moveRotApplied[i] = 0.0f;
+        }
         m_moveSteps.clear();
         m_movePending = false;
     };
     const bool isPlane = m_selection && m_selection->primaryType() == SelectionType::Plane;
-    if (m_inSketchMode || !m_gizmo || m_gizmo->getMode() != GizmoMode::Translate ||
+    // Fork: the combined (Fusion-style) Move gizmo keeps this panel whichever
+    // handle was last grabbed, and adds rotation fields.
+    const bool combined = m_gizmo && m_gizmo->isCombined();
+    if (m_inSketchMode || !m_gizmo ||
+        (m_gizmo->getMode() != GizmoMode::Translate && !combined) ||
         m_selection->navigationOnly() ||
         !(m_selection->hasSelectedBodies() || isPlane)) {
         endSession();
         return;
     }
 
-    if (m_movePending && m_typedMoveQueue.empty() && !m_gizmoDragging) {
+    if (m_movePending && m_typedMoveQueue.empty() && m_typedRotateQueue.empty() &&
+        !m_gizmoDragging) {
         m_movePending = false;
         const int after = m_history->currentStep();
         if (after > m_movePendingBefore) {
             TypedRotateStep st{m_movePendingBefore, after, {0, 0, 0}};
-            for (int i = 0; i < 3; ++i) st.delta[i] = m_movePendingDelta[i];
+            for (int i = 0; i < 3; ++i) {
+                st.delta[i] = m_movePendingDelta[i];
+                st.rot[i] = m_movePendingRot[i];
+            }
             m_moveSteps.push_back(st);
         }
     }
 
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 250,
-                                    ImGui::GetWindowPos().y + 50));
+    const float dp = uiScale();
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 250.0f * dp,
+                                    ImGui::GetWindowPos().y + 50.0f * dp));
     ImGui::SetNextWindowSize(uiSz(230, 0));
     ImGui::Begin("##MovePanel", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1095,31 +1109,60 @@ void Application::renderMovePanel() {
     for (int i = 0; i < 3; ++i) {
         ImGui::PushID(i);
         ImGui::TextColored(axisColors[i], "%s", axisLabels[i]);
-        ImGui::SameLine(28);
-        ImGui::SetNextItemWidth(95.0f);
+        ImGui::SameLine(28.0f * dp);
+        ImGui::SetNextItemWidth(95.0f * dp);
         materializr::lengthField("##mv", &m_multiMove[i]);
         ImGui::SameLine(); ImGui::TextUnformatted(materializr::unitSuffix());
         ImGui::PopID();
     }
+    if (combined) {
+        ImGui::Spacing();
+        ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Rotate"));
+        ImGui::Separator();
+        for (int i = 0; i < 3; ++i) {
+            ImGui::PushID(10 + i);
+            ImGui::TextColored(axisColors[i], "%s", axisLabels[i]);
+            ImGui::SameLine(28.0f * dp);
+            ImGui::SetNextItemWidth(95.0f * dp);
+            materializr::inputNumber("##deg", &m_moveRot[i], 0.0f, 0.0f, "%.3f");
+            ImGui::SameLine(); ImGui::TextUnformatted("\xC2\xB0");
+            ImGui::PopID();
+        }
+    }
 
     ImGui::Spacing();
-    float pending[3];
-    bool anyNonZero = false;
+    float pending[3], pendingRot[3];
+    bool anyMove = false, anyRot = false;
     for (int i = 0; i < 3; ++i) {
         pending[i] = m_multiMove[i] - m_multiMoveApplied[i];
-        anyNonZero |= std::abs(pending[i]) > 1e-4f;
+        anyMove |= std::abs(pending[i]) > 1e-4f;
+        pendingRot[i] = combined ? (m_moveRot[i] - m_moveRotApplied[i]) : 0.0f;
+        anyRot |= std::abs(pendingRot[i]) > 1e-3f;
     }
-    const bool busy = m_gizmoDragging || !m_typedMoveQueue.empty() || m_movePending;
-    ImGui::BeginDisabled(!anyNonZero || busy);
+    const bool busy = m_gizmoDragging || !m_typedMoveQueue.empty() ||
+                      !m_typedRotateQueue.empty() || m_movePending;
+    ImGui::BeginDisabled(!(anyMove || anyRot) || busy);
     if (ImGui::Button(materializr::tr("Apply"), materializr::uiSz(70, 0))) {
         m_movePendingBefore = m_history->currentStep();
         for (int i = 0; i < 3; ++i) {
-            m_movePendingDelta[i] = pending[i];
-            m_multiMoveApplied[i] = m_multiMove[i];
+            m_movePendingDelta[i] = anyMove ? pending[i] : 0.0f;
+            if (anyMove) m_multiMoveApplied[i] = m_multiMove[i];
+            m_movePendingRot[i] = 0.0f;
         }
-        m_typedMoveQueue.push_back(glm::vec3(pending[0], pending[2], pending[1]));
+        if (anyMove)
+            m_typedMoveQueue.push_back(glm::vec3(pending[0], pending[2], pending[1]));
+        if (anyRot) {
+            // Same user->world axis remap as the Rotate panel.
+            const int userToWorld[3] = {0, 2, 1};
+            for (int i = 0; i < 3; ++i) {
+                if (std::abs(pendingRot[i]) <= 1e-3f) continue;
+                m_typedRotateQueue.push_back({userToWorld[i], pendingRot[i]});
+                m_movePendingRot[i] = pendingRot[i];
+                m_moveRotApplied[i] = m_moveRot[i];
+            }
+        }
         m_movePending = true;
-        m_wakeFrames = std::max(m_wakeFrames, 5); // render-on-demand: let the commit run
+        m_wakeFrames = std::max(m_wakeFrames, 8); // render-on-demand: let the commits run
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1135,6 +1178,8 @@ void Application::renderMovePanel() {
         for (int i = 0; i < 3; ++i) {
             m_multiMove[i]        -= st.delta[i];
             m_multiMoveApplied[i] -= st.delta[i];
+            m_moveRot[i]          -= st.rot[i];
+            m_moveRotApplied[i]   -= st.rot[i];
         }
         m_wakeFrames = std::max(m_wakeFrames, 5);
     }
@@ -3235,7 +3280,8 @@ void Application::renderSketchMovePanel() {
     // the visibility rule for the gizmo itself. Without this gate the panel
     // pops up as soon as you select a sketch, because the gizmo's mode
     // persists across selections and defaults to Translate.
-    bool conditionsMet = m_gizmo && m_gizmo->getMode() == GizmoMode::Translate &&
+    bool conditionsMet = m_gizmo &&
+                         (m_gizmo->getMode() == GizmoMode::Translate || m_gizmo->isCombined()) &&
                          m_selection && distinctSketches == 1 &&
                          m_selection->selectedBodyCount() == 0 &&
                          !m_inSketchMode &&

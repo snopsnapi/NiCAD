@@ -2820,7 +2820,10 @@ void Application::handleToolAction(int action) {
                 !m_selection->hasSelectedSketches() &&
                 !m_selection->hasSelectedSketchRegions() &&
                 !isPlane && !isAxis) break;
-            m_gizmo->setMode(GizmoMode::Translate);
+            // Fork: Fusion-style Move - arrows, rotation rings and plane
+            // squares in one gizmo. An axis only translates.
+            if (isAxis) m_gizmo->setMode(GizmoMode::Translate);
+            else m_gizmo->setCombinedMove();
             m_selection->setNavigationOnly(false);
             for (const auto& e : m_selection->getSelection()) {
                 if ((e.type == SelectionType::Sketch ||

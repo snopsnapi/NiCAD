@@ -7,7 +7,9 @@ namespace materializr {
 class Camera;
 
 enum class GizmoMode { Translate, Rotate, Scale };
-enum class GizmoAxis { None, X, Y, Z };
+// XY / YZ / XZ: the plane handles of the combined Move gizmo (translate
+// within that world plane).
+enum class GizmoAxis { None, X, Y, Z, XY, YZ, XZ };
 
 struct GizmoResult {
     bool changed = false;
@@ -23,8 +25,18 @@ public:
 
     bool initialize();
 
+    // setMode also leaves the combined Move gizmo (see setCombinedMove).
     void setMode(GizmoMode mode);
     GizmoMode getMode() const;
+    // Fork: Fusion-style Move - arrows, rotation rings and plane squares all
+    // at once. Grabbing a handle switches the effective mode (getMode) to
+    // Translate or Rotate; it stays so until the next grab, so the app's
+    // commit (which reads getMode after release) applies the right transform.
+    void setCombinedMove();
+    bool isCombined() const { return m_combined; }
+    // Combined mode only: set the effective mode without leaving combined
+    // (typed values in the Move panel).
+    void setEffectiveMode(GizmoMode mode) { m_mode = mode; }
 
     void setPosition(glm::vec3 pos);
     void setVisible(bool vis);
@@ -59,6 +71,7 @@ public:
 
 private:
     GizmoMode m_mode = GizmoMode::Translate;
+    bool m_combined = false;
     glm::vec3 m_position{0};
     bool m_visible = false;
 
@@ -85,9 +98,17 @@ private:
     unsigned int m_cubeVao = 0, m_cubeVbo = 0;
     int m_cubeVertCount = 0;
 
+    unsigned int m_planeVao = 0, m_planeVbo = 0;
+    int m_planeVertCount = 0;
+
     void buildArrowMesh();
     void buildRingMesh();
     void buildCubeMesh();
+    void buildPlaneMesh();
+    // Combined mode: move within the handle's plane (XY/YZ/XZ). Ray-plane hit
+    // through the gizmo origin; false when the view is edge-on to the plane.
+    bool projectOnPlane(float mx, float my, float vpW, float vpH,
+                        const Camera& camera, GizmoAxis plane, glm::vec3& out);
     bool compileShader(unsigned int& shader, unsigned int type, const char* source);
 
     struct PickResult { GizmoAxis axis; GizmoMode mode; float dist; };
