@@ -56,7 +56,9 @@ enum class ToolAction {
     SketchConstrainMenu,
     // Fork: Surface workspace commands (command-first rail).
     SurfaceExtrude, Sweep, TrimSurface, ExtendSurface, OffsetSurface, StudioSpline,
-    CurvePointCondition
+    CurvePointCondition,
+    // Form workspace.
+    FormBox, FormPlane, FormCylinder, FormSphere, EditForm, ConvertForm
 };
 
 class Toolbar {

@@ -45,6 +45,8 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/TrimSurfaceOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SurfaceEditOps.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/StudioSplineOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/Form.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/FormOp.cpp
     ${CMAKE_SOURCE_DIR}/src/i18n.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/AirfoilImport.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchTool.cpp
@@ -773,6 +775,12 @@ add_test(NAME test_spline_tangent COMMAND test_spline_tangent)
 add_executable(test_surface_ops test_surface_ops.cpp)
 target_link_libraries(test_surface_ops PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_surface_ops COMMAND test_surface_ops)
+
+# test_form - Form workspace core (Form): Catmull-Clark cage with creases,
+# cage edits, NURBS conversion, and the Form / Convert Form steps.
+add_executable(test_form test_form.cpp)
+target_link_libraries(test_form PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_form COMMAND test_form)
 
 # test_fit_spline - the FitSpline port of rt_spline.interpolate(): golden-data
 # match, de Boor evaluation through points/derivatives, OCCT round-trip,

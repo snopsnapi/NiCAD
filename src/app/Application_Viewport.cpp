@@ -43,6 +43,7 @@
 #include "ui/TouchIcons.h"   // im-touch circle-confirm bubble ✗/✓ glyphs
 #include "ui/TouchWidgets.h"
 #include "viewport/BoxSelect.h"
+#include "viewport/FormRenderer.h"
 #include "viewport/SectionView.h"
 #include "viewport/EdgeRenderer.h"
 #include "viewport/BackgroundRenderer.h"
@@ -804,6 +805,9 @@ void Application::renderViewport() {
         if (m_shapeRenderer->reflectionPending())
             m_wakeFrames = std::max(m_wakeFrames, 2);
         m_edgeRenderer->render(view, proj);
+        // Fork: Form (T-spline-style) surfaces - not Document bodies.
+        refreshFormMeshes();
+        if (m_formRenderer) m_formRenderer->render(view, proj, cam.getPosition());
         // Passes that draw IN FRONT - the reference photo (500), construction
         // planes (501) and axes (502),
         // which is what both already claim ("above body") but never got: the
@@ -5918,6 +5922,19 @@ void Application::renderViewport() {
                         if (pickCurvePoint(localX, localY, contentSize.x, contentSize.y,
                                            24.0f * uiScale(), cp)) {
                             const SelectionEntry entry = curvePointEntry(cp);
+                            if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
+                            else m_selection->select(entry);
+                            regionConsumedClick = true;
+                        }
+                    }
+                    // Fork: a tap on a Form selects it (forms are not bodies).
+                    if (!regionConsumedClick && clickSelectionAllowed && selectClicked &&
+                        pendingAllows(SelectionType::Form)) {
+                        int fid = -1;
+                        if (pickForm(localX, localY, contentSize.x, contentSize.y, fid)) {
+                            SelectionEntry entry;
+                            entry.type = SelectionType::Form;
+                            entry.bodyId = fid;
                             if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else m_selection->select(entry);
                             regionConsumedClick = true;

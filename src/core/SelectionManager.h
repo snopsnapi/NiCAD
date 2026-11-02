@@ -16,7 +16,9 @@ enum class SelectionType {
     Axis,
     // Fork: a point of a Studio Spline (3D curve). bodyId = the curve's body,
     // subShapeIndex = the point's index in its StudioSplineOp.
-    CurvePoint
+    CurvePoint,
+    // Fork: a Form (T-spline-style cage); bodyId = the form id.
+    Form
 };
 
 struct SelectionEntry {
