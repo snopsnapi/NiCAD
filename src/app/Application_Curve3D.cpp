@@ -7,6 +7,8 @@
 #include "core/History.h"
 #include "core/SelectionManager.h"
 #include "modeling/StudioSplineOp.h"
+#include "modeling/Sketch.h"
+#include "modeling/SketchEditOp.h"
 #include "viewport/Camera.h"
 #include "viewport/Viewport.h"
 #include "i18n.h"
@@ -27,6 +29,34 @@
 
 namespace materializr {
 
+namespace {
+// Sketch 2D -> world (the sketch plane has no scale).
+gp_Pnt sketchWorld(const Sketch& sk, glm::vec2 p) {
+    const gp_Ax3& ax = sk.getPlane().Position();
+    return ax.Location().Translated(gp_Vec(ax.XDirection()) * p.x +
+                                    gp_Vec(ax.YDirection()) * p.y);
+}
+} // namespace
+
+// Selection key of a curve point. Studio Spline: body + point index. A point
+// of an ordinary sketch spline: sketch + (spline id, point index) packed into
+// subShapeIndex (bodyId -1).
+SelectionEntry Application::curvePointEntry(const CurvePointRef& r) {
+    SelectionEntry e;
+    e.type = SelectionType::CurvePoint;
+    e.bodyId = r.bodyId;
+    e.sketchId = r.sketchId;
+    e.subShapeIndex = r.sketchId >= 0 ? r.splineId * 4096 + r.index : r.index;
+    return e;
+}
+
+bool Application::curvePointMatches(const SelectionEntry& e, const CurvePointRef& r) {
+    if (e.type != SelectionType::CurvePoint) return false;
+    const SelectionEntry k = curvePointEntry(r);
+    return e.bodyId == k.bodyId && e.sketchId == k.sketchId &&
+           e.subShapeIndex == k.subShapeIndex;
+}
+
 std::vector<Application::CurvePointRef> Application::curvePoints() const {
     std::vector<CurvePointRef> out;
     if (!m_history || !m_document) return out;
@@ -44,6 +74,42 @@ std::vector<Application::CurvePointRef> Application::curvePoints() const {
             r.index = static_cast<int>(i);
             r.p = glm::vec3(pts[i].X(), pts[i].Y(), pts[i].Z());
             out.push_back(r);
+        }
+    }
+    // Ordinary sketch splines: their points show (and pick) while the sketch
+    // or one of its points is selected, or a Move is waiting for input -
+    // moving one turns that spline into a Studio Spline (beginCurveDrag).
+    if (m_inSketchMode || !m_selection) return out;
+    std::vector<int> sketches;
+    for (const auto& e : m_selection->getSelection())
+        if ((e.type == SelectionType::Sketch || e.type == SelectionType::SketchRegion ||
+             (e.type == SelectionType::CurvePoint && e.bodyId < 0)) && e.sketchId >= 0 &&
+            std::find(sketches.begin(), sketches.end(), e.sketchId) == sketches.end())
+            sketches.push_back(e.sketchId);
+    if (m_pendingCmd.active && pendingAllows(SelectionType::CurvePoint))
+        for (int sid : m_document->getAllSketchIds())
+            if (m_document->isSketchVisible(sid) &&
+                std::find(sketches.begin(), sketches.end(), sid) == sketches.end())
+                sketches.push_back(sid);
+    for (int sid : sketches) {
+        auto sk = m_document->getSketch(sid);
+        if (!sk) continue;
+        for (const auto& sp : sk->getSplines()) {
+            if (sp.isConstruction) continue;
+            const auto& ids = sp.controlPointIds;
+            const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+            const size_t n = ids.size() - (closedSp ? 1 : 0);
+            for (size_t k = 0; k < n; ++k) {
+                const SketchPoint* pt = sk->getPoint(ids[k]);
+                if (!pt) continue;
+                const gp_Pnt w = sketchWorld(*sk, pt->pos);
+                CurvePointRef r;
+                r.sketchId = sid;
+                r.splineId = sp.id;
+                r.index = static_cast<int>(k);
+                r.p = glm::vec3(w.X(), w.Y(), w.Z());
+                out.push_back(r);
+            }
         }
     }
     return out;
@@ -82,20 +148,101 @@ glm::vec3 Application::selectedCurvePointsCentre() const {
     for (const auto& e : m_selection->getSelection()) {
         if (e.type != SelectionType::CurvePoint) continue;
         for (const CurvePointRef& r : all)
-            if (r.bodyId == e.bodyId && r.index == e.subShapeIndex) { sum += r.p; ++n; break; }
+            if (curvePointMatches(e, r)) { sum += r.p; ++n; break; }
     }
     return n ? sum / static_cast<float>(n) : sum;
+}
+
+// An ordinary sketch spline becomes a Studio Spline: one step flags it
+// construction in its sketch (it stops forming profiles but keeps its points
+// and constraints), the next creates the 3D curve through the same points,
+// carrying its Tangent/G2 end contacts over as end conditions. Returns the
+// new curve's body id, or -1.
+int Application::promoteSketchSpline(int sketchId, int splineId) {
+    auto sk = m_document->getSketch(sketchId);
+    if (!sk) return -1;
+    const SketchSpline* sp = nullptr;
+    for (const auto& s : sk->getSplines()) if (s.id == splineId) { sp = &s; break; }
+    if (!sp || sp->isConstruction) return -1;
+    const auto& ids = sp->controlPointIds;
+    const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+    const size_t n = ids.size() - (closedSp ? 1 : 0);
+    std::vector<gp_Pnt> pts;
+    for (size_t k = 0; k < n; ++k)
+        if (const SketchPoint* pt = sk->getPoint(ids[k])) pts.push_back(sketchWorld(*sk, pt->pos));
+    if (pts.size() < 2) return -1;
+    SplineEndCondition sc, ec;
+    sk->splineEndConditions(*sp, sc, ec);
+    const gp_Ax3& ax = sk->getPlane().Position();
+    auto world = [&](const glm::dvec2& d) {
+        return gp_Vec(ax.XDirection()) * d.x + gp_Vec(ax.YDirection()) * d.y;
+    };
+    auto cond = [&](const SplineEndCondition& c) {
+        StudioSplineOp::PointCond pc;
+        if (!c.active) return pc;
+        pc.type = c.g2 ? StudioSplineOp::Cond::G2 : StudioSplineOp::Cond::G1;
+        pc.dir = world(c.dir);
+        if (c.g2) pc.curv = world(c.normal) * c.curvature;
+        return pc;
+    };
+
+    auto trackBodies = trackBodyChanges();
+    auto before = std::make_shared<Sketch>(*sk);
+    auto after = std::make_shared<Sketch>(*sk);
+    after->setSplineConstruction(splineId, true);
+    auto edit = std::make_unique<SketchEditOp>(sk, before, after);
+    edit->setSketchId(sketchId);
+    if (!m_history->pushOperation(std::move(edit), *m_document)) return -1;
+    cascadeFromSketchEdit(sketchId);
+
+    auto op = std::make_unique<StudioSplineOp>();
+    op->setPoints(pts);
+    op->setClosed(closedSp);
+    op->setCondition(0, cond(sc));
+    op->setCondition(pts.size() - 1, cond(ec));
+    StudioSplineOp* raw = op.get();
+    if (!m_history->pushOperation(std::move(op), *m_document)) return -1;
+    return raw->createdBodyId();
 }
 
 void Application::beginCurveDrag() {
     m_curveDrag.clear();
     m_curveDragBefore.clear();
     if (!m_selection) return;
+    // First turn any picked ordinary-spline points into Studio Spline points.
+    {
+        std::vector<SelectionEntry> sel = m_selection->getSelection();
+        std::vector<std::pair<std::pair<int, int>, int>> promoted;   // (sketch, spline) -> body
+        bool changed = false;
+        for (auto& e : sel) {
+            if (e.type != SelectionType::CurvePoint || e.bodyId >= 0 || e.sketchId < 0) continue;
+            const int splineId = e.subShapeIndex / 4096;
+            const int index = e.subShapeIndex % 4096;
+            int body = -1;
+            for (const auto& p : promoted)
+                if (p.first.first == e.sketchId && p.first.second == splineId) body = p.second;
+            if (body < 0) {
+                body = promoteSketchSpline(e.sketchId, splineId);
+                promoted.push_back({{e.sketchId, splineId}, body});
+            }
+            if (body < 0) continue;
+            e.bodyId = body;
+            e.sketchId = -1;
+            e.subShapeIndex = index;
+            changed = true;
+        }
+        if (changed) {
+            m_selection->clear();
+            for (const auto& e : sel)
+                if (e.type != SelectionType::CurvePoint || e.bodyId >= 0)
+                    m_selection->addToSelection(e);
+        }
+    }
     const std::vector<CurvePointRef> all = curvePoints();
     for (const auto& e : m_selection->getSelection()) {
         if (e.type != SelectionType::CurvePoint) continue;
         for (const CurvePointRef& r : all)
-            if (r.bodyId == e.bodyId && r.index == e.subShapeIndex) {
+            if (r.step >= 0 && curvePointMatches(e, r)) {
                 m_curveDrag.push_back({r.step, r.index, gp_Pnt(r.p.x, r.p.y, r.p.z)});
                 bool have = false;
                 for (const auto& b : m_curveDragBefore) if (b.first == r.step) have = true;
@@ -221,7 +368,7 @@ void Application::renderCurvePointPanel() {
     if (n != 1) return;
     const StudioSplineOp* op = nullptr;
     for (const CurvePointRef& r : curvePoints())
-        if (r.bodyId == body && r.index == index) {
+        if (r.step >= 0 && r.bodyId == body && r.index == index) {
             op = dynamic_cast<const StudioSplineOp*>(m_history->getStep(r.step));
             break;
         }
@@ -279,7 +426,7 @@ void Application::applyCurvePointCondition() {
     int step = -1;
     gp_Pnt at;
     for (const CurvePointRef& r : curvePoints())
-        if (r.bodyId == m_curveCondBody && r.index == m_curveCondIndex) {
+        if (r.step >= 0 && r.bodyId == m_curveCondBody && r.index == m_curveCondIndex) {
             step = r.step;
             at = gp_Pnt(r.p.x, r.p.y, r.p.z);
             break;
@@ -370,6 +517,27 @@ void Application::applyCurvePointCondition() {
     pe.subShapeIndex = m_curveCondIndex;
     m_selection->select(pe);
     markDirty();
+}
+
+int Application::studioSplineStepForBody(int bodyId) const {
+    if (!m_history || bodyId < 0) return -1;
+    const int upTo = m_history->currentStep();
+    for (int st = 0; st <= upTo; ++st) {
+        const auto* op = dynamic_cast<const StudioSplineOp*>(m_history->getStep(st));
+        if (op && op->isEnabled() && op->createdBodyId() == bodyId) return st;
+    }
+    return -1;
+}
+
+bool Application::beginStudioSplineEdit(int step) {
+    cancelAllInteractivePreviews();
+    m_studioSplineEditCtl.onCommitted = [this](int st, const std::string& before) {
+        recordParamEdit({{st, before}});
+        markDirty();
+    };
+    const bool ok = m_studioSplineEditCtl.beginEdit(iopContext(), step);
+    m_meshesDirty = true;
+    return ok;
 }
 
 } // namespace materializr

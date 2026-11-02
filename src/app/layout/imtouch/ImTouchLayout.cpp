@@ -1470,6 +1470,9 @@ void Application::renderImTouchLayout() {
                 if (!handled && op->isEnabled() && i <= curr &&
                     (op->typeId() == "extrude" || op->typeId() == "surface_extrude"))
                     handled = beginInteractiveExtrudeEdit(i);
+                if (!handled && op->isEnabled() && i <= curr &&
+                    op->typeId() == "studio_spline")
+                    handled = beginStudioSplineEdit(i);
                 if (!handled) {
                     m_imTouchHistoryEdit = i;
                     m_imTouchStepBackup = op->serializeParams();

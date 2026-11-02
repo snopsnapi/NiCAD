@@ -151,6 +151,8 @@ public:
     const std::vector<SketchCircle>& getCircles() const;
     const std::vector<SketchArc>& getArcs() const;
     const std::vector<SketchSpline>& getSplines() const;
+    // Fork: flag one spline construction (or back). False if no such spline.
+    bool setSplineConstruction(int splineId, bool construction);
     const std::vector<SketchPolygon>& getPolygons() const;
 
     // Sample the smooth interpolated curve of a spline as sketch-2D points
