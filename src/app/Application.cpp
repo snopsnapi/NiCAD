@@ -2735,6 +2735,12 @@ void Application::handleToolAction(int action) {
         case ToolAction::TrimSurface:
             beginIop(m_trimSurfaceCtl);
             break;
+        case ToolAction::ExtendSurface:
+            beginIop(m_extendSurfaceCtl);
+            break;
+        case ToolAction::OffsetSurface:
+            beginIop(m_offsetSurfaceCtl);
+            break;
         case ToolAction::SketchConstrainMenu:
             // ТЗ-21: the touch rail's Constraints button always opens the menu
             // (switch tool there; tapping the active item leaves the mode).

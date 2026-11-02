@@ -6,6 +6,7 @@
 // SweepOp, TrimSurfaceOp) call these, and tests/test_surface_ops.cpp checks
 // them directly.
 
+#include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Wire.hxx>
@@ -47,6 +48,20 @@ TopoDS_Shape splitByTool(const TopoDS_Shape& target, const TopoDS_Shape& tool);
 // back as removeFacesOpen does. Null when the split fails or nothing is left.
 TopoDS_Shape trim(const TopoDS_Shape& target, const TopoDS_Shape& tool,
                   const std::vector<gp_Pnt>& removeAt);
+
+// Extend: each listed FREE boundary edge of `body` (an edge of exactly one
+// face) pushes its face's side outward by `length`, continuing the face's
+// own surface (GeomLib::ExtendSurfByLength, curvature-continuous). The face
+// is rebuilt as the extended untrimmed patch (inner trims/holes of that face
+// are dropped) and re-sewn to its neighbours. Null when no edge qualifies or
+// the extension fails.
+TopoDS_Shape extendEdges(const TopoDS_Shape& body, const std::vector<TopoDS_Edge>& edges,
+                         double length);
+
+// Offset: the faces (one or several, sewn where they touch) moved along their
+// normals by `distance` as a NEW surface (the input is not changed). A
+// negative distance offsets against the normal. Null on failure.
+TopoDS_Shape offsetFaces(const std::vector<TopoDS_Face>& faces, double distance);
 
 // First hit of the ray (origin, dir) on `shape`'s faces; false on a miss.
 bool pickPoint(const TopoDS_Shape& shape, const gp_Pnt& origin, const gp_Dir& dir,

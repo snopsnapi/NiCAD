@@ -8,6 +8,7 @@
 #include "modeling/SurfaceExtrudeOp.h"
 #include "modeling/SweepOp.h"
 #include "modeling/TrimSurfaceOp.h"
+#include "modeling/SurfaceEditOps.h"
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -23,6 +24,12 @@
 #include <TopoDS.hxx>
 #include <BRep_Tool.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Ax2.hxx>
+#include <Geom_Curve.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
+#include <cmath>
 
 #include <vector>
 
@@ -240,4 +247,126 @@ TEST(SurfaceOpsDoc, SweepCurveProfile) {
         EXPECT_NEAR(area(doc.getBody(id)), 48.0, 1e-6);
     }
     EXPECT_EQ(n, 1);
+}
+
+namespace {
+
+TopoDS_Face xyPatch(double x0, double x1, double y0, double y1) {
+    return BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+                                   x0, x1, y0, y1).Face();
+}
+
+// The edge of `face` whose midpoint is nearest `p`.
+TopoDS_Edge edgeNear(const TopoDS_Shape& s, const gp_Pnt& p) {
+    TopoDS_Edge best;
+    double bestD = 1e300;
+    for (TopExp_Explorer ex(s, TopAbs_EDGE); ex.More(); ex.Next()) {
+        const TopoDS_Edge e = TopoDS::Edge(ex.Current());
+        double f, l;
+        Handle(Geom_Curve) c = BRep_Tool::Curve(e, f, l);
+        if (c.IsNull()) continue;
+        const double d = c->Value(0.5 * (f + l)).Distance(p);
+        if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+}
+
+} // namespace
+
+// A 10x10 sheet extended 5 mm past its x = 10 edge: 15 x 10.
+TEST(SurfaceOps, ExtendPlanarEdge) {
+    const TopoDS_Face sheet = xyPatch(0, 10, 0, 10);
+    const TopoDS_Shape out =
+        surf::extendEdges(sheet, {edgeNear(sheet, gp_Pnt(10, 5, 0))}, 5.0);
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_EQ(count(out, TopAbs_FACE), 1);
+    EXPECT_NEAR(area(out), 150.0, 1e-4);
+}
+
+// Two edges of the same face extended at once: 15 x 15.
+TEST(SurfaceOps, ExtendTwoSides) {
+    const TopoDS_Face sheet = xyPatch(0, 10, 0, 10);
+    const TopoDS_Shape out = surf::extendEdges(
+        sheet, {edgeNear(sheet, gp_Pnt(10, 5, 0)), edgeNear(sheet, gp_Pnt(5, 0, 0))}, 5.0);
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_NEAR(area(out), 225.0, 1e-4);
+}
+
+// An L of two sheets sharing an edge: extending a free edge of one keeps the
+// two joined in one shell. The shared edge is not free - it is refused.
+TEST(SurfaceOps, ExtendKeepsShellJoined) {
+    BRepBuilderAPI_MakePolygon poly;
+    poly.Add(gp_Pnt(0, 0, 10));
+    poly.Add(gp_Pnt(0, 0, 0));
+    poly.Add(gp_Pnt(10, 0, 0));
+    const TopoDS_Shape l = surf::extrudeCurves({poly.Wire()}, gp_Vec(0, 10, 0));
+    ASSERT_EQ(count(l, TopAbs_FACE), 2);
+    const TopoDS_Shape out =
+        surf::extendEdges(l, {edgeNear(l, gp_Pnt(10, 5, 0))}, 4.0);
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_EQ(count(out, TopAbs_SHELL), 1);
+    EXPECT_NEAR(area(out), 100.0 + 140.0, 1e-4);
+    EXPECT_TRUE(surf::extendEdges(l, {edgeNear(l, gp_Pnt(0, 5, 0))}, 4.0).IsNull());
+}
+
+// A sheet offset 3 mm along its normal: same area, moved to z = 3.
+TEST(SurfaceOps, OffsetPlanarSheet) {
+    const TopoDS_Shape out = surf::offsetFaces({xyPatch(0, 10, 0, 10)}, 3.0);
+    ASSERT_FALSE(out.IsNull());
+    EXPECT_NEAR(area(out), 100.0, 1e-4);
+    Bnd_Box bb;
+    BRepBndLib::Add(out, bb);
+    double x0, y0, z0, x1, y1, z1;
+    bb.Get(x0, y0, z0, x1, y1, z1);
+    EXPECT_NEAR(0.5 * (z0 + z1), 3.0, 1e-3);
+}
+
+// A quarter cylinder R = 10, height 5, offset outward by 2: area scales R'/R.
+TEST(SurfaceOps, OffsetCylindricalSheet) {
+    BRepBuilderAPI_MakeEdge arc(gp_Circ(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 10.0),
+                                0.0, M_PI / 2.0);
+    const TopoDS_Shape sheet = surf::extrudeCurves(
+        {BRepBuilderAPI_MakeWire(arc.Edge()).Wire()}, gp_Vec(0, 0, 5));
+    ASSERT_EQ(count(sheet, TopAbs_FACE), 1);
+    const TopoDS_Face face = TopoDS::Face(TopExp_Explorer(sheet, TopAbs_FACE).Current());
+    const double a0 = area(face);
+    const TopoDS_Shape out = surf::offsetFaces({face}, 2.0);
+    ASSERT_FALSE(out.IsNull());
+    const double a1 = area(out);
+    // Outward or inward depends on the face's normal: accept either radius.
+    const bool outward = std::abs(a1 - a0 * 12.0 / 10.0) < 1e-3 * a0;
+    const bool inward = std::abs(a1 - a0 * 8.0 / 10.0) < 1e-3 * a0;
+    EXPECT_TRUE(outward || inward) << "a0=" << a0 << " a1=" << a1;
+}
+
+// Extend and Offset as history steps on a Document: Extend grows the sheet
+// in place (undo restores it) and round-trips its params; Offset adds a new
+// body and leaves the source alone.
+TEST(SurfaceOpsDoc, ExtendAndOffsetSteps) {
+    Document doc;
+    const int id = doc.addBody(xyPatch(0, 10, 0, 10), "sheet");
+    ExtendSurfaceOp ext;
+    ext.setBody(id);
+    ext.setEdges({edgeNear(doc.getBody(id), gp_Pnt(10, 5, 0))});
+    ext.setLength(5.0);
+    ASSERT_TRUE(ext.execute(doc));
+    EXPECT_NEAR(area(doc.getBody(id)), 150.0, 1e-4);
+    ExtendSurfaceOp extRe;
+    ASSERT_TRUE(extRe.deserializeParams(ext.serializeParams()));
+    EXPECT_NEAR(extRe.length(), 5.0, 1e-9);
+    ASSERT_TRUE(ext.undo(doc));
+    EXPECT_NEAR(area(doc.getBody(id)), 100.0, 1e-4);
+
+    OffsetSurfaceOp off;
+    off.setSource(id);
+    off.setFaces({TopoDS::Face(TopExp_Explorer(doc.getBody(id), TopAbs_FACE).Current())});
+    off.setDistance(3.0);
+    ASSERT_TRUE(off.execute(doc));
+    ASSERT_GE(off.createdBodyId(), 0);
+    EXPECT_NE(off.createdBodyId(), id);
+    EXPECT_NEAR(area(doc.getBody(off.createdBodyId())), 100.0, 1e-4);
+    EXPECT_NEAR(area(doc.getBody(id)), 100.0, 1e-4);
+    OffsetSurfaceOp offRe;
+    ASSERT_TRUE(offRe.deserializeParams(off.serializeParams()));
+    EXPECT_NEAR(offRe.distance(), 3.0, 1e-9);
 }
