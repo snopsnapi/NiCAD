@@ -1,5 +1,7 @@
 #include "SurfaceOps.h"
 
+#include <cmath>
+
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -13,6 +15,18 @@
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRep_Tool.hxx>
+#include <Geom2d_Curve.hxx>
+#include <GeomConvert.hxx>
+#include <GeomLib.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom_Surface.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <map>
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <gp_Lin.hxx>
 #include <TopExp_Explorer.hxx>
@@ -143,6 +157,115 @@ TopoDS_Shape splitByTool(const TopoDS_Shape& target, const TopoDS_Shape& tool) {
     } catch (...) {
         return TopoDS_Shape();
     }
+}
+
+TopoDS_Shape extendEdges(const TopoDS_Shape& body, const std::vector<TopoDS_Edge>& edges,
+                         double length) {
+    if (body.IsNull() || edges.empty() || !(length > 1e-9)) return TopoDS_Shape();
+    try {
+        TopTools_IndexedDataMapOfShapeListOfShape e2f;
+        TopExp::MapShapesAndAncestors(body, TopAbs_EDGE, TopAbs_FACE, e2f);
+        // Which sides of which face to push: bit 0 umin, 1 umax, 2 vmin, 3 vmax.
+        std::vector<TopoDS_Face> faces;
+        std::vector<int> sides;
+        auto faceSlot = [&](const TopoDS_Face& f) {
+            for (size_t i = 0; i < faces.size(); ++i)
+                if (faces[i].IsSame(f)) return static_cast<int>(i);
+            faces.push_back(f);
+            sides.push_back(0);
+            return static_cast<int>(faces.size()) - 1;
+        };
+        for (const TopoDS_Edge& e : edges) {
+            if (e.IsNull() || !e2f.Contains(e)) continue;
+            const TopTools_ListOfShape& owners = e2f.FindFromKey(e);
+            // A free edge belongs to one face (a seam lists that face twice).
+            TopoDS_Face owner;
+            int distinct = 0;
+            for (const TopoDS_Shape& f : owners) {
+                if (!owner.IsNull() && owner.IsSame(f)) continue;
+                owner = TopoDS::Face(f);
+                ++distinct;
+            }
+            if (distinct != 1) continue;
+            double u1, u2, v1, v2;
+            BRepTools::UVBounds(owner, u1, u2, v1, v2);
+            double f0, f1;
+            Handle(Geom2d_Curve) pc = BRep_Tool::CurveOnSurface(e, owner, f0, f1);
+            if (pc.IsNull()) continue;
+            const gp_Pnt2d m = pc->Value(0.5 * (f0 + f1));
+            const double d[4] = {std::abs(m.X() - u1), std::abs(m.X() - u2),
+                                 std::abs(m.Y() - v1), std::abs(m.Y() - v2)};
+            int side = 0;
+            for (int k = 1; k < 4; ++k) if (d[k] < d[side]) side = k;
+            sides[faceSlot(owner)] |= (1 << side);
+        }
+        if (faces.empty()) return TopoDS_Shape();
+
+        std::vector<TopoDS_Face> rebuilt;
+        for (size_t i = 0; i < faces.size(); ++i) {
+            const TopoDS_Face& f = faces[i];
+            double u1, u2, v1, v2;
+            BRepTools::UVBounds(f, u1, u2, v1, v2);
+            Handle(Geom_Surface) s = BRep_Tool::Surface(f);
+            if (s.IsNull()) return TopoDS_Shape();
+            Handle(Geom_RectangularTrimmedSurface) trimmed =
+                new Geom_RectangularTrimmedSurface(s, u1, u2, v1, v2);
+            Handle(Geom_BSplineSurface) bs = GeomConvert::SurfaceToBSplineSurface(trimmed);
+            if (bs.IsNull()) return TopoDS_Shape();
+            Handle(Geom_BoundedSurface) bounded = bs;
+            for (int k = 0; k < 4; ++k) {
+                if (!(sides[i] & (1 << k))) continue;
+                const bool inU = (k < 2);
+                const bool after = (k == 1 || k == 3);
+                GeomLib::ExtendSurfByLength(bounded, length, /*Cont=*/2, inU, after);
+                if (bounded.IsNull()) return TopoDS_Shape();
+            }
+            BRepBuilderAPI_MakeFace mk(bounded, 1e-7);
+            if (!mk.IsDone()) return TopoDS_Shape();
+            TopoDS_Face nf = mk.Face();
+            if (f.Orientation() == TopAbs_REVERSED) nf.Reverse();
+            rebuilt.push_back(nf);
+        }
+        // Everything else unchanged; sew so the rebuilt faces rejoin their
+        // neighbours along the sides that did not move.
+        std::vector<TopoDS_Face> all;
+        TopTools_IndexedMapOfShape seen;
+        for (TopExp_Explorer ex(body, TopAbs_FACE); ex.More(); ex.Next()) {
+            const TopoDS_Face f = TopoDS::Face(ex.Current());
+            if (seen.Contains(f)) continue;
+            seen.Add(f);
+            bool replaced = false;
+            for (const TopoDS_Face& g : faces) if (g.IsSame(f)) { replaced = true; break; }
+            if (!replaced) all.push_back(f);
+        }
+        all.insert(all.end(), rebuilt.begin(), rebuilt.end());
+        if (all.size() == 1) return all.front();
+        BRepBuilderAPI_Sewing sew(1e-4);
+        for (const TopoDS_Face& f : all) sew.Add(f);
+        sew.Perform();
+        return sew.SewedShape();
+    } catch (...) {
+        return TopoDS_Shape();
+    }
+}
+
+TopoDS_Shape offsetFaces(const std::vector<TopoDS_Face>& faces, double distance) {
+    if (faces.empty() || std::abs(distance) < 1e-9) return TopoDS_Shape();
+    const TopoDS_Shape src = facesToShells(faces);
+    if (src.IsNull()) return TopoDS_Shape();
+    try {
+        BRepOffsetAPI_MakeOffsetShape mo;
+        mo.PerformByJoin(src, distance, 1e-6);
+        if (mo.IsDone() && !mo.Shape().IsNull()) return mo.Shape();
+    } catch (...) {}
+    try {
+        // Simple offset: no joining of neighbours, but it copes with shapes
+        // the join algorithm rejects.
+        BRepOffsetAPI_MakeOffsetShape mo;
+        mo.PerformBySimple(src, distance);
+        if (mo.IsDone() && !mo.Shape().IsNull()) return mo.Shape();
+    } catch (...) {}
+    return TopoDS_Shape();
 }
 
 bool pickPoint(const TopoDS_Shape& shape, const gp_Pnt& origin, const gp_Dir& dir,

@@ -43,6 +43,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/SurfaceOps.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SurfaceExtrudeOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/TrimSurfaceOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/SurfaceEditOps.cpp
     ${CMAKE_SOURCE_DIR}/src/i18n.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/AirfoilImport.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchTool.cpp

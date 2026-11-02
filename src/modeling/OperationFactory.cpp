@@ -3,6 +3,7 @@
 #include "SweepOp.h"
 #include "SurfaceExtrudeOp.h"
 #include "TrimSurfaceOp.h"
+#include "SurfaceEditOps.h"
 #include "LoftOp.h"
 #include "GuidedLoftOp.h"
 #include "BoundaryFillOp.h"
@@ -65,6 +66,8 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "extrude")  return std::make_unique<ExtrudeOp>();
     if (typeId == "surface_extrude") return std::make_unique<SurfaceExtrudeOp>();
     if (typeId == "trim_surface")    return std::make_unique<TrimSurfaceOp>();
+    if (typeId == "extend_surface")  return std::make_unique<ExtendSurfaceOp>();
+    if (typeId == "offset_surface")  return std::make_unique<OffsetSurfaceOp>();
     if (typeId == "pushpull") return std::make_unique<PushPullOp>();
     if (typeId == "moveface") return std::make_unique<MoveFaceOp>();
     if (typeId == "combine_sketches") return std::make_unique<CombineSketchesOp>();

@@ -178,6 +178,10 @@ const std::vector<WsGroup>& surfaceWorkspace() {
             {MZ_ICON_SEW,   "Sew",   ToolAction::None, "Sew", kSelB, 1, false},
             kCmdRemove,
         }},
+        {"Modify", MZ_ICON_PUSHPULL, {
+            {MZ_ICON_PUSHPULL, "Extend", ToolAction::ExtendSurface, nullptr, kSelE, 1, false},
+            {MZ_ICON_SHELL,    "Offset", ToolAction::OffsetSurface, nullptr, kSelF, 1, false},
+        }},
         {"Edit", MZ_ICON_MOVE, {
             kCmdMove,
             kCmdMirror,
