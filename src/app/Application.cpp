@@ -2685,16 +2685,28 @@ void Application::handleToolAction(int action) {
                 if (std::find(sids.begin(), sids.end(), e.sketchId) == sids.end())
                     sids.push_back(e.sketchId);
             }
-            if (sids.size() < 2) {
-                showToast(materializr::tr("Sweep needs two sketches: the profile first, then the path."));
+            // Fork: a curve-only body (a Spline 3D) can be the path too.
+            TopoDS_Wire bodyPath;
+            for (const auto& e : m_selection->getSelection()) {
+                if (e.type != SelectionType::Body || e.bodyId < 0) continue;
+                try {
+                    const TopoDS_Shape& b = m_document->getBody(e.bodyId);
+                    if (b.IsNull() || TopExp_Explorer(b, TopAbs_FACE).More()) continue;
+                    TopExp_Explorer wx(b, TopAbs_WIRE);
+                    if (wx.More()) { bodyPath = TopoDS::Wire(wx.Current()); break; }
+                } catch (...) {}
+            }
+            if (sids.empty() || (sids.size() < 2 && bodyPath.IsNull())) {
+                showToast(materializr::tr("Sweep needs a profile sketch and a path: a second sketch or a 3D spline."));
                 break;
             }
             auto profSk = m_document->getSketch(sids[0]);
-            auto pathSk = m_document->getSketch(sids[1]);
-            if (!profSk || !pathSk) break;
-            // Path: the longest curve chain of the second sketch.
-            TopoDS_Wire path;
+            if (!profSk) break;
+            auto pathSk = sids.size() >= 2 ? m_document->getSketch(sids[1]) : nullptr;
+            // Path: the 3D spline, or the longest curve chain of the second sketch.
+            TopoDS_Wire path = bodyPath;
             double bestLen = -1.0;
+            if (path.IsNull() && pathSk)
             for (const TopoDS_Wire& w : pathSk->buildCurveWires()) {
                 double len = 0.0;
                 try {
@@ -2740,6 +2752,9 @@ void Application::handleToolAction(int action) {
             break;
         case ToolAction::OffsetSurface:
             beginIop(m_offsetSurfaceCtl);
+            break;
+        case ToolAction::StudioSpline:
+            beginIop(m_studioSplineCtl);
             break;
         case ToolAction::SketchConstrainMenu:
             // ТЗ-21: the touch rail's Constraints button always opens the menu
@@ -2907,7 +2922,7 @@ void Application::handleToolAction(int action) {
             if (!m_selection->hasSelectedBodies() &&
                 !m_selection->hasSelectedSketches() &&
                 !m_selection->hasSelectedSketchRegions() &&
-                !isPlane && !isAxis) break;
+                !isPlane && !isAxis && !hasSelectedCurvePoints()) break;
             // Fork: Fusion-style Move - arrows, rotation rings and plane
             // squares in one gizmo. An axis only translates.
             if (isAxis) m_gizmo->setMode(GizmoMode::Translate);

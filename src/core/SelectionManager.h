@@ -13,7 +13,10 @@ enum class SelectionType {
     Sketch,
     SketchRegion,
     Plane,
-    Axis
+    Axis,
+    // Fork: a point of a Studio Spline (3D curve). bodyId = the curve's body,
+    // subShapeIndex = the point's index in its StudioSplineOp.
+    CurvePoint
 };
 
 struct SelectionEntry {

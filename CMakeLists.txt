@@ -244,6 +244,7 @@ add_executable(materializr
     src/app/FaceOpControllers.cpp
     src/app/TrimSurfaceController.cpp
     src/app/SurfaceEditControllers.cpp
+    src/app/StudioSplineController.cpp
     src/app/ExtrudeController.cpp
     src/app/PushPullController.cpp
     src/app/PushPullPreview.cpp
@@ -261,6 +262,7 @@ add_executable(materializr
     src/app/layout/modern/ModernLayout.cpp
     src/app/layout/imtouch/ImTouchLayout.cpp
     src/app/Application_Viewport.cpp
+    src/app/Application_Curve3D.cpp
     src/app/Window.cpp
     src/platform_sdl.cpp
     src/plugin/PluginContext.cpp
@@ -386,6 +388,7 @@ add_executable(materializr
     src/modeling/SurfaceExtrudeOp.cpp
     src/modeling/TrimSurfaceOp.cpp
     src/modeling/SurfaceEditOps.cpp
+    src/modeling/StudioSplineOp.cpp
     src/modeling/Unfold.cpp
     src/modeling/SketchSolver.cpp
     src/modeling/AirfoilImport.cpp

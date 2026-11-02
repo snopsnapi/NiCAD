@@ -9,6 +9,8 @@
 #include "modeling/SweepOp.h"
 #include "modeling/TrimSurfaceOp.h"
 #include "modeling/SurfaceEditOps.h"
+#include "modeling/StudioSplineOp.h"
+#include <algorithm>
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -369,4 +371,45 @@ TEST(SurfaceOpsDoc, ExtendAndOffsetSteps) {
     OffsetSurfaceOp offRe;
     ASSERT_TRUE(offRe.deserializeParams(off.serializeParams()));
     EXPECT_NEAR(offRe.distance(), 3.0, 1e-9);
+}
+
+// Studio Spline: the curve passes through every point (also closed), honours
+// an end tangent, survives a params round trip, and is a curve-only body.
+TEST(StudioSpline, ThroughPointsAndTangent) {
+    const std::vector<gp_Pnt> pts = {gp_Pnt(0, 0, 0), gp_Pnt(10, 5, 3),
+                                     gp_Pnt(20, 0, 8), gp_Pnt(30, -4, 2)};
+    const TopoDS_Shape w = StudioSplineOp::buildCurve(pts, false, gp_Vec(0, 0, 1));
+    ASSERT_FALSE(w.IsNull());
+    EXPECT_EQ(count(w, TopAbs_FACE), 0);
+    const TopoDS_Edge e = TopoDS::Edge(TopExp_Explorer(w, TopAbs_EDGE).Current());
+    double f, l;
+    Handle(Geom_Curve) c = BRep_Tool::Curve(e, f, l);
+    ASSERT_FALSE(c.IsNull());
+    for (const gp_Pnt& p : pts) {
+        double best = 1e9;
+        for (int i = 0; i <= 2000; ++i)
+            best = std::min(best, c->Value(f + (l - f) * i / 2000.0).Distance(p));
+        EXPECT_LT(best, 0.05);
+    }
+    gp_Pnt p0;
+    gp_Vec d0;
+    c->D1(f, p0, d0);
+    EXPECT_GT(d0.Normalized().Z(), 0.999);
+
+    const TopoDS_Shape loop = StudioSplineOp::buildCurve(pts, true);
+    ASSERT_FALSE(loop.IsNull());
+    EXPECT_TRUE(BRep_Tool::IsClosed(TopoDS::Wire(loop)));
+
+    Document doc;
+    StudioSplineOp op;
+    op.setPoints(pts);
+    ASSERT_TRUE(op.execute(doc));
+    ASSERT_GE(op.createdBodyId(), 0);
+    op.setPoint(1, gp_Pnt(10, 9, 3));
+    ASSERT_TRUE(op.execute(doc));   // re-execute reuses the body id
+    EXPECT_EQ(static_cast<int>(doc.getAllBodyIds().size()), 1);
+    StudioSplineOp re;
+    ASSERT_TRUE(re.deserializeParams(op.serializeParams()));
+    ASSERT_EQ(re.points().size(), 4u);
+    EXPECT_NEAR(re.points()[1].Y(), 9.0, 1e-9);
 }
