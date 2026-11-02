@@ -35,6 +35,7 @@
 #include <gp_Pnt.hxx>
 #include <TopTools_HSequenceOfShape.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
+#include <gp_Vec.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
@@ -800,6 +801,47 @@ Handle(Geom_BSplineCurve) exactSplineInterpolant(const std::vector<glm::dvec3>& 
     return c;
 }
 
+// Tangent/G2 end contacts (TZ-22) as fitspline rows for a 2D point set
+// (z = 0). fitspline normalises its parameter to [0,1] by chord length, so a
+// d1 = dir * L and, for G2, d2 = curvature * L^2 * normal, with L the sum of
+// the chord lengths. Shared by interpolate2D and curvatureComb2D so the comb
+// is computed on exactly the drawn curve.
+std::vector<fitspline::Constraint> endConstraints2D(
+    const std::vector<glm::dvec3>& pts3, bool closed,
+    const SplineEndCondition& startCond, const SplineEndCondition& endCond) {
+    std::vector<fitspline::Constraint> conds;
+    const int n = static_cast<int>(pts3.size());
+    const bool hasStart = startCond.active && !closed;
+    const bool hasEnd = endCond.active && !closed;
+    if (n < 2 || (!hasStart && !hasEnd)) return conds;
+    double chord = 0.0;
+    for (int i = 1; i < n; ++i)
+        chord += glm::length(pts3[static_cast<size_t>(i)] -
+                             pts3[static_cast<size_t>(i - 1)]);
+    if (chord <= 1e-12) return conds;
+    if (hasStart) {
+        fitspline::Constraint fc;
+        fc.index = 0;
+        fc.d1 = glm::dvec3(startCond.dir * chord, 0.0);
+        if (startCond.g2)
+            fc.d2 = glm::dvec3(startCond.curvature * chord * chord *
+                                   startCond.normal,
+                               0.0);
+        conds.push_back(fc);
+    }
+    if (hasEnd) {
+        fitspline::Constraint fc;
+        fc.index = n - 1;
+        fc.d1 = glm::dvec3(endCond.dir * chord, 0.0);
+        if (endCond.g2)
+            fc.d2 = glm::dvec3(endCond.curvature * chord * chord *
+                                   endCond.normal,
+                               0.0);
+        conds.push_back(fc);
+    }
+    return conds;
+}
+
 } // anonymous
 
 std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
@@ -841,40 +883,8 @@ std::vector<glm::vec2> Sketch::interpolate2D(const std::vector<glm::vec2>& ctrl,
     std::vector<glm::dvec3> pts3;
     pts3.reserve(static_cast<size_t>(n));
     for (const glm::vec2& p : ctrl) pts3.emplace_back(p.x, p.y, 0.0);
-    // Tangent/G2 end contacts (TZ-22). fitspline normalises its parameter to
-    // [0,1] by chord length, so a world-space d1 = dir * L and, for G2,
-    // d2 = curvature * L^2 * normal, with L the sum of the chord lengths.
-    std::vector<fitspline::Constraint> conds;
-    const bool hasStart = startCond.active && !closed;
-    const bool hasEnd = endCond.active && !closed;
-    if (hasStart || hasEnd) {
-        double chord = 0.0;
-        for (int i = 1; i < n; ++i)
-            chord += glm::length(pts3[static_cast<size_t>(i)] -
-                                 pts3[static_cast<size_t>(i - 1)]);
-        if (chord > 1e-12) {
-            if (hasStart) {
-                fitspline::Constraint fc;
-                fc.index = 0;
-                fc.d1 = glm::dvec3(startCond.dir * chord, 0.0);
-                if (startCond.g2)
-                    fc.d2 = glm::dvec3(startCond.curvature * chord * chord *
-                                           startCond.normal,
-                                       0.0);
-                conds.push_back(fc);
-            }
-            if (hasEnd) {
-                fitspline::Constraint fc;
-                fc.index = n - 1;
-                fc.d1 = glm::dvec3(endCond.dir * chord, 0.0);
-                if (endCond.g2)
-                    fc.d2 = glm::dvec3(endCond.curvature * chord * chord *
-                                           endCond.normal,
-                                       0.0);
-                conds.push_back(fc);
-            }
-        }
-    }
+    const std::vector<fitspline::Constraint> conds =
+        endConstraints2D(pts3, closed, startCond, endCond);
     std::vector<double> params;
     Handle(Geom_BSplineCurve) curve =
         exactSplineInterpolant(pts3, closed && n >= 3, params,
@@ -962,6 +972,75 @@ std::vector<glm::vec2> Sketch::sampleSpline2D(const SketchSpline& sp,
         if (closedSp) ctrlIds->push_back(usedIds.front());
     }
     return out;
+}
+
+// Curvature comb (fork): signed curvature of the exact interpolant, read off
+// its analytic 1st/2nd derivatives (Geom_Curve::D2), not from the polyline.
+// Same point set, end conditions and cached curve as interpolate2D, so the
+// comb describes precisely the curve on screen.
+std::vector<CurvatureCombSample> Sketch::curvatureComb2D(
+    const std::vector<glm::vec2>& ctrl, int samplesPerSpan, bool closed,
+    const SplineEndCondition& startCond, const SplineEndCondition& endCond) {
+    std::vector<CurvatureCombSample> out;
+    const int n = static_cast<int>(ctrl.size());
+    if (n < 2 || samplesPerSpan < 1) return out;
+    const int spans = closed ? n : n - 1;
+    std::vector<glm::dvec3> pts3;
+    pts3.reserve(static_cast<size_t>(n));
+    for (const glm::vec2& p : ctrl) pts3.emplace_back(p.x, p.y, 0.0);
+    const std::vector<fitspline::Constraint> conds =
+        endConstraints2D(pts3, closed, startCond, endCond);
+    std::vector<double> params;
+    Handle(Geom_BSplineCurve) curve =
+        exactSplineInterpolant(pts3, closed && n >= 3, params,
+                               conds.empty() ? nullptr : &conds);
+    if (curve.IsNull() || params.size() != static_cast<size_t>(spans) + 1)
+        return out;
+    out.reserve(static_cast<size_t>(spans) * samplesPerSpan + 1);
+    auto sampleAt = [&](double u) {
+        gp_Pnt p;
+        gp_Vec d1, d2;
+        try {
+            curve->D2(u, p, d1, d2);
+        } catch (...) {
+            return;
+        }
+        const double speed = std::hypot(d1.X(), d1.Y());
+        if (speed < 1e-12) return; // cusp: no defined normal
+        CurvatureCombSample s;
+        s.point = glm::dvec2(p.X(), p.Y());
+        s.normal = glm::dvec2(-d1.Y(), d1.X()) / speed;
+        s.curvature = (d1.X() * d2.Y() - d1.Y() * d2.X()) /
+                      (speed * speed * speed);
+        out.push_back(s);
+    };
+    for (int s = 0; s < spans; ++s) {
+        const double u0 = params[static_cast<size_t>(s)];
+        const double u1 = params[static_cast<size_t>(s) + 1];
+        for (int i = 0; i < samplesPerSpan; ++i)
+            sampleAt(u0 + (u1 - u0) * static_cast<double>(i) / samplesPerSpan);
+    }
+    // Last sample: the open end, or the closing seam again so the envelope
+    // of a closed spline closes too.
+    sampleAt(params.back());
+    return out;
+}
+
+std::vector<CurvatureCombSample> Sketch::curvatureComb(
+    const SketchSpline& sp, int samplesPerSpan) const {
+    const auto& ids = sp.controlPointIds;
+    const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+    std::vector<glm::vec2> ctrl;
+    const size_t n = ids.size() - (closedSp ? 1 : 0);
+    ctrl.reserve(n);
+    for (size_t k = 0; k < n; ++k) {
+        const SketchPoint* p = getPoint(ids[k]); // skip dangling ids, as sampleSpline2D
+        if (p) ctrl.push_back(p->pos);
+    }
+    if (ctrl.size() < 2) return {};
+    SplineEndCondition startCond, endCond;
+    splineEndConditions(sp, startCond, endCond);
+    return curvatureComb2D(ctrl, samplesPerSpan, closedSp, startCond, endCond);
 }
 
 // --- Spline Tangent/G2 contacts (TZ-22) -------------------------------------
