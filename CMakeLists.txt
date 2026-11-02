@@ -380,6 +380,7 @@ add_executable(materializr
     src/modeling/SvgImport.cpp
     src/modeling/Sketch.cpp
     src/modeling/FitSpline.cpp
+    src/modeling/SurfaceOps.cpp
     src/modeling/Unfold.cpp
     src/modeling/SketchSolver.cpp
     src/modeling/AirfoilImport.cpp

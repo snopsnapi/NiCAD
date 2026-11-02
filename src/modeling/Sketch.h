@@ -231,6 +231,14 @@ public:
     // so polyline fidelity is ample.
     TopoDS_Wire buildOpenWire() const;
 
+    // Fork (Surface workspace): every non-construction curve of the sketch as
+    // an EXACT world-space edge - lines, full circles, arcs, splines (the
+    // same conditioned interpolant buildWires emits) - chained into wires
+    // where their ends meet (open or closed). For surface extrude / sweep /
+    // loft through open curves, which buildWires (closed loops only) and
+    // buildOpenWire (one sampled chain) can't serve.
+    std::vector<TopoDS_Wire> buildCurveWires() const;
+
     // Whole-profile shape for "extrude everything this sketch encloses":
     // closed wires grouped even-odd by containment depth - every
     // even-depth wire is an island outer, its directly-contained

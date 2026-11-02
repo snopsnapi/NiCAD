@@ -1,5 +1,6 @@
 #include "DefeatureOp.h"
 #include "SubShapeIndex.h"
+#include "SurfaceOps.h"
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -21,6 +22,15 @@ bool DefeatureOp::execute(Document& doc) {
     try {
         m_previousShape = doc.getBody(m_bodyId);
         if (m_previousShape.IsNull()) return false;
+
+        if (!m_heal) {
+            std::vector<TopoDS_Face> faces;
+            for (const TopoDS_Shape& f : m_faces) faces.push_back(TopoDS::Face(f));
+            const TopoDS_Shape open = materializr::surf::removeFacesOpen(m_previousShape, faces);
+            if (open.IsNull()) return false;
+            doc.updateBody(m_bodyId, open);
+            return true;
+        }
 
         BRepAlgoAPI_Defeaturing df;
         df.SetShape(m_previousShape);
@@ -58,13 +68,14 @@ bool DefeatureOp::undo(Document& doc) {
 }
 
 std::string DefeatureOp::description() const {
-    return "Remove " + std::to_string(m_faces.Size()) + " face(s)";
+    return (m_heal ? "Remove " : "Delete ") + std::to_string(m_faces.Size()) + " face(s)";
 }
 
 void DefeatureOp::renderProperties() {
     ImGui::Text("%s", materializr::tr("Remove Feature"));
     ImGui::Separator();
     ImGui::Text(materializr::tr("Faces removed: %d"), m_faces.Size());
+    ImGui::Checkbox(materializr::tr("Heal"), &m_heal);
     ImGui::Text(materializr::tr("Body ID: %d"), m_bodyId);
 }
 
@@ -75,6 +86,7 @@ std::string DefeatureOp::serializeParams() const {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "body=%d", m_bodyId);
     blob += buf;
+    if (!m_heal) blob += ";heal=0";   // absent = heal (older saves)
     if (!m_previousShape.IsNull() && !m_faces.IsEmpty()) {
         std::vector<TopoDS_Shape> faces;
         for (const TopoDS_Shape& f : m_faces) faces.push_back(f);
@@ -97,6 +109,7 @@ bool DefeatureOp::deserializeParams(const std::string& blob) {
         std::string val = blob.substr(eq + 1, end - eq - 1);
         if      (key == "body")  { m_bodyId = std::atoi(val.c_str()); any = true; }
         else if (key == "faces") { m_faceIndices = SubShapeIndex::parse(val); any = true; }
+        else if (key == "heal")  { m_heal = (val != "0"); }
         pos = end + 1;
     }
     return any;

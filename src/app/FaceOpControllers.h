@@ -87,6 +87,9 @@ protected:
 
 private:
     std::vector<TopoDS_Face> m_faces;
+    // Fork: Heal checkbox (NX-style) - off deletes the faces and leaves the
+    // body open. Remembered between uses.
+    bool m_heal = true;
 };
 
 // ─── Offset Face ─────────────────────────────────────────────────────────────

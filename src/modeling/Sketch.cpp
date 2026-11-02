@@ -33,6 +33,8 @@
 #include <Geom_BSplineCurve.hxx>
 #include <ElCLib.hxx>
 #include <gp_Pnt.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
@@ -1504,6 +1506,86 @@ void Sketch::removeConstraint(int id) {
 // The longest OPEN chain in the sketch - see the header note. Each element
 // becomes a run of 2D sample points; chains are walked from degree-1 nodes so
 // closed loops (which buildWires owns) never qualify.
+std::vector<TopoDS_Wire> Sketch::buildCurveWires() const {
+    Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
+    auto addEdge = [&](const TopoDS_Edge& e) { if (!e.IsNull()) edges->Append(e); };
+    try {
+        for (const auto& line : m_lines) {
+            if (line.isConstruction) continue;
+            const SketchPoint* a = getPoint(line.startPointId);
+            const SketchPoint* b = getPoint(line.endPointId);
+            if (!a || !b) continue;
+            const gp_Pnt p1 = sketchToWorld(a->pos), p2 = sketchToWorld(b->pos);
+            if (p1.Distance(p2) < 1e-9) continue;
+            BRepBuilderAPI_MakeEdge mk(p1, p2);
+            if (mk.IsDone()) addEdge(mk.Edge());
+        }
+        for (const auto& circle : m_circles) {
+            if (circle.isConstruction || circle.radius <= 0.0) continue;
+            const SketchPoint* c = getPoint(circle.centerPointId);
+            if (!c) continue;
+            const gp_Ax3& ax = m_plane.Position();
+            gp_Circ circ(gp_Ax2(sketchToWorld(c->pos), ax.Direction(), ax.XDirection()),
+                         circle.radius);
+            BRepBuilderAPI_MakeEdge mk(circ);
+            if (mk.IsDone()) addEdge(mk.Edge());
+        }
+        for (const auto& arc : m_arcs) {
+            if (arc.isConstruction) continue;
+            const SketchPoint* c = getPoint(arc.centerPointId);
+            const SketchPoint* st = getPoint(arc.startPointId);
+            const SketchPoint* en = getPoint(arc.endPointId);
+            if (!c || !st || !en) continue;
+            float sA = std::atan2(st->pos.y - c->pos.y, st->pos.x - c->pos.x);
+            float eA = std::atan2(en->pos.y - c->pos.y, en->pos.x - c->pos.x);
+            if (eA <= sA) eA += 2.0f * static_cast<float>(M_PI);
+            const float midA = 0.5f * (sA + eA);
+            const glm::vec2 mid(c->pos.x + std::cos(midA) * static_cast<float>(arc.radius),
+                                c->pos.y + std::sin(midA) * static_cast<float>(arc.radius));
+            GC_MakeArcOfCircle mkArc(sketchToWorld(st->pos), sketchToWorld(mid),
+                                     sketchToWorld(en->pos));
+            if (!mkArc.IsDone()) continue;
+            BRepBuilderAPI_MakeEdge mk(mkArc.Value());
+            if (mk.IsDone()) addEdge(mk.Edge());
+        }
+        for (const auto& sp : m_splines) {
+            if (sp.isConstruction || sp.controlPointIds.size() < 2) continue;
+            const auto& ids = sp.controlPointIds;
+            const bool closedSp = ids.size() > 2 && ids.front() == ids.back();
+            std::vector<glm::dvec3> pts3;
+            const size_t nCtrl = ids.size() - (closedSp ? 1 : 0);
+            for (size_t k = 0; k < nCtrl; ++k) {
+                const SketchPoint* cp = getPoint(ids[k]);
+                if (!cp) continue;
+                const gp_Pnt w = sketchToWorld(cp->pos);
+                pts3.emplace_back(w.X(), w.Y(), w.Z());
+            }
+            if (pts3.size() < 2) continue;
+            std::vector<double> params;
+            const std::vector<fitspline::Constraint> conds =
+                worldSplineEndConditions(sp, pts3);
+            Handle(Geom_BSplineCurve) curve = exactSplineInterpolant(
+                pts3, closedSp && pts3.size() >= 3, params,
+                conds.empty() ? nullptr : &conds);
+            // The interpolant is memoised; an edge must own its geometry.
+            if (!curve.IsNull()) curve = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+            if (curve.IsNull()) continue;
+            BRepBuilderAPI_MakeEdge mk(curve);
+            if (mk.IsDone()) addEdge(mk.Edge());
+        }
+    } catch (...) {}
+    std::vector<TopoDS_Wire> out;
+    if (edges->IsEmpty()) return out;
+    try {
+        Handle(TopTools_HSequenceOfShape) wires;
+        ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, 1e-4, Standard_False, wires);
+        if (!wires.IsNull())
+            for (int i = 1; i <= wires->Length(); ++i)
+                out.push_back(TopoDS::Wire(wires->Value(i)));
+    } catch (...) {}
+    return out;
+}
+
 TopoDS_Wire Sketch::buildOpenWire() const {
     struct ChainEdge {
         int a = -1, b = -1;                 // endpoint point-ids

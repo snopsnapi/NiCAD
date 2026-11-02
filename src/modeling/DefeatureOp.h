@@ -21,6 +21,11 @@ public:
     void clearFaces();
 
     int getBodyId() const { return m_bodyId; }
+    // Fork: Heal (NX-style). On (default): the neighbours are extended over
+    // the gap (BRepAlgoAPI_Defeaturing). Off: the faces are simply deleted
+    // and the body is left open - a surface body (surf::removeFacesOpen).
+    void setHeal(bool heal) { m_heal = heal; }
+    bool heal() const { return m_heal; }
 
     bool execute(Document& doc) override;
     bool undo(Document& doc) override;
@@ -41,4 +46,5 @@ private:
     // Removed faces persist as ordinal indices into the INPUT shape's canonical
     // face map (see SubShapeIndex.h) so the step reloads as a real editable op.
     std::vector<int> m_faceIndices;
+    bool m_heal = true;
 };

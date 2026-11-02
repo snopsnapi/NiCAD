@@ -388,11 +388,12 @@ std::unique_ptr<Operation> DefeatureController::buildOp(const IopContext&) {
     if (m_faces.empty()) return nullptr;
     auto op = std::make_unique<DefeatureOp>();
     op->setBody(bodyId());
+    op->setHeal(m_heal);
     for (const auto& f : m_faces) op->addFace(f);
     return op;
 }
 
-void DefeatureController::panelBody(const IopContext&, bool&) {
+void DefeatureController::panelBody(const IopContext&, bool& changed) {
     if (materializr::showPanelHints()) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
     ImGui::TextDisabled("%s", materializr::tr("Removes the selected face(s) and heals the surrounding faces back together - e.g. take a baked fillet back to a sharp edge so you can re-fillet it."));
@@ -400,6 +401,7 @@ void DefeatureController::panelBody(const IopContext&, bool&) {
     ImGui::Separator();
     }
     ImGui::Text(materializr::tr("%zu face(s) selected"), m_faces.size());
+    if (ImGui::Checkbox(materializr::tr("Heal"), &m_heal)) changed = true;
 
     if (previewOk()) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "%s", materializr::tr("Previewing removal"));

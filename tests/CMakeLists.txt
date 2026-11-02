@@ -40,6 +40,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/PushPullOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/Sketch.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FitSpline.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/SurfaceOps.cpp
     ${CMAKE_SOURCE_DIR}/src/i18n.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/AirfoilImport.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchTool.cpp
@@ -762,6 +763,12 @@ add_test(NAME test_sketch_merge COMMAND test_sketch_merge)
 add_executable(test_spline_tangent test_spline_tangent.cpp)
 target_link_libraries(test_spline_tangent PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_spline_tangent COMMAND test_spline_tangent)
+
+# test_surface_ops - Surface workspace geometry (SurfaceOps): delete faces
+# without healing, extrude curves into surfaces, sweep, trim.
+add_executable(test_surface_ops test_surface_ops.cpp)
+target_link_libraries(test_surface_ops PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_surface_ops COMMAND test_surface_ops)
 
 # test_fit_spline - the FitSpline port of rt_spline.interpolate(): golden-data
 # match, de Boor evaluation through points/derivatives, OCCT round-trip,
