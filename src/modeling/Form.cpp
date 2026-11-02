@@ -357,6 +357,88 @@ void Cage::deleteFaces(const std::vector<int>& sel) {
     creases = std::move(nc);
 }
 
+// ── Symmetry ────────────────────────────────────────────────────────────────
+
+gp_Pnt Cage::mirror(const gp_Pnt& p) const {
+    if (symAxis < 0 || symAxis > 2) return p;
+    gp_Pnt q = p;
+    q.SetCoord(symAxis + 1, 2.0 * symPos - p.Coord(symAxis + 1));
+    return q;
+}
+
+std::vector<int> Cage::mirrorPartners() const {
+    if (symAxis < 0 || symAxis > 2) return {};
+    Bnd_Box bb;
+    for (const gp_Pnt& p : verts) bb.Add(p);
+    const double tol = std::max(1e-9, std::sqrt(bb.IsVoid() ? 1.0 : bb.SquareExtent()) * 1e-5);
+    // Bucket by a coarse key on the two in-plane coordinates.
+    const int a = (symAxis + 1) % 3, b = (symAxis + 2) % 3;
+    const double cell = tol * 4.0;
+    std::map<std::pair<long long, long long>, std::vector<int>> grid;
+    auto key = [&](const gp_Pnt& p, int da, int db) {
+        return std::make_pair(static_cast<long long>(std::floor(p.Coord(a + 1) / cell)) + da,
+                              static_cast<long long>(std::floor(p.Coord(b + 1) / cell)) + db);
+    };
+    for (size_t i = 0; i < verts.size(); ++i) grid[key(verts[i], 0, 0)].push_back(static_cast<int>(i));
+    std::vector<int> partner(verts.size(), -1);
+    for (size_t i = 0; i < verts.size(); ++i) {
+        const gp_Pnt m = mirror(verts[i]);
+        double best = tol;
+        for (int da = -1; da <= 1; ++da)
+            for (int db = -1; db <= 1; ++db) {
+                auto it = grid.find(key(m, da, db));
+                if (it == grid.end()) continue;
+                for (int j : it->second) {
+                    const double d = verts[static_cast<size_t>(j)].Distance(m);
+                    if (d <= best) { best = d; partner[i] = j; }
+                }
+            }
+    }
+    return partner;
+}
+
+void Cage::transformSymmetric(const Cage& start, const std::vector<int>& ids, const gp_Trsf& t) {
+    std::set<int> moved;
+    for (int v : ids)
+        if (v >= 0 && v < static_cast<int>(verts.size()) && v < static_cast<int>(start.verts.size()))
+            moved.insert(v);
+    for (int v : moved) verts[static_cast<size_t>(v)] = start.verts[static_cast<size_t>(v)].Transformed(t);
+    if (symAxis < 0) return;
+    const std::vector<int> partner = start.mirrorPartners();
+    for (int v : moved) {
+        const int p = partner.empty() ? -1 : partner[static_cast<size_t>(v)];
+        if (p == v) {
+            // On the plane: stays on it.
+            verts[static_cast<size_t>(v)].SetCoord(symAxis + 1, symPos);
+        } else if (p >= 0 && !moved.count(p)) {
+            verts[static_cast<size_t>(p)] = mirror(verts[static_cast<size_t>(v)]);
+        }
+    }
+}
+
+int Cage::mirrorFace(int f, const std::vector<int>& partner) const {
+    if (f < 0 || f >= static_cast<int>(faces.size()) || partner.empty()) return -1;
+    std::set<int> want;
+    for (int v : faces[static_cast<size_t>(f)]) {
+        const int p = partner[static_cast<size_t>(v)];
+        if (p < 0) return -1;
+        want.insert(p);
+    }
+    for (size_t g = 0; g < faces.size(); ++g) {
+        if (faces[g].size() != want.size()) continue;
+        std::set<int> have(faces[g].begin(), faces[g].end());
+        if (have == want) return static_cast<int>(g);
+    }
+    return -1;
+}
+
+Edge Cage::mirrorEdge(const Edge& e, const std::vector<int>& partner) const {
+    if (partner.empty()) return {-1, -1};
+    const int a = partner[static_cast<size_t>(e.first)], b = partner[static_cast<size_t>(e.second)];
+    if (a < 0 || b < 0) return {-1, -1};
+    return edgeKey(a, b);
+}
+
 // ── Serialization ───────────────────────────────────────────────────────────
 
 std::string Cage::serialize() const {
@@ -369,6 +451,7 @@ std::string Cage::serialize() const {
         os << '\n';
     }
     for (const Edge& e : creases) os << "C " << e.first << ' ' << e.second << '\n';
+    if (symAxis >= 0) os << "S " << symAxis << ' ' << symPos << '\n';
     return os.str();
 }
 
@@ -391,6 +474,10 @@ bool Cage::deserialize(const std::string& s) {
         } else if (k == 'C') {
             int a, b;
             if (ls >> a >> b) c.creases.insert(edgeKey(a, b));
+        } else if (k == 'S') {
+            int ax;
+            double pos;
+            if ((ls >> ax >> pos) && ax >= 0 && ax <= 2) { c.symAxis = ax; c.symPos = pos; }
         }
         if (c.verts.size() > 1000000 || c.faces.size() > 1000000) return false;
     }

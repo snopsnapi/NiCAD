@@ -172,3 +172,45 @@ TEST(Form, FormAndConvertSteps) {
     EXPECT_EQ(re.formId(), f.formId());
     EXPECT_EQ(re.cage(), f.cage());
 }
+
+// Symmetry across X = 0: every box vertex has a mirror partner; moving one
+// corner moves its partner to the mirror image; a vertex on the plane stays
+// on it; the setting survives serialization.
+TEST(Form, Symmetry) {
+    form::Cage c = form::box(2, 2, 2, 2);   // middle column on x = 0
+    c.symAxis = 0;
+    c.symPos = 0.0;
+    const auto partner = c.mirrorPartners();
+    ASSERT_EQ(partner.size(), c.verts.size());
+    int onPlane = 0;
+    for (size_t i = 0; i < partner.size(); ++i) {
+        ASSERT_GE(partner[i], 0);
+        if (partner[i] == static_cast<int>(i)) ++onPlane;
+    }
+    EXPECT_GT(onPlane, 0);
+    int corner = -1, mid = -1;
+    for (size_t i = 0; i < c.verts.size(); ++i) {
+        const gp_Pnt& p = c.verts[i];
+        if (p.X() > 0.9 && p.Y() > 0.9 && p.Z() > 0.9) corner = static_cast<int>(i);
+        if (std::abs(p.X()) < 1e-9 && p.Y() > 0.9 && p.Z() > 0.9) mid = static_cast<int>(i);
+    }
+    ASSERT_GE(corner, 0);
+    ASSERT_GE(mid, 0);
+    const form::Cage start = c;
+    gp_Trsf t;
+    t.SetTranslation(gp_Vec(0.5, 0.3, 0.0));
+    c.transformSymmetric(start, {corner, mid}, t);
+    const gp_Pnt pc = c.verts[static_cast<size_t>(corner)];
+    const gp_Pnt pp = c.verts[static_cast<size_t>(partner[static_cast<size_t>(corner)])];
+    EXPECT_NEAR(pp.X(), -pc.X(), 1e-9);
+    EXPECT_NEAR(pp.Y(), pc.Y(), 1e-9);
+    EXPECT_NEAR(c.verts[static_cast<size_t>(mid)].X(), 0.0, 1e-12);   // stayed on the plane
+    EXPECT_NEAR(c.verts[static_cast<size_t>(mid)].Y(), 1.3, 1e-9);
+    // Mirror face of a face on +X is on -X.
+    const int f = 0;
+    const int mf = c.mirrorFace(f, start.mirrorPartners());
+    EXPECT_GE(mf, 0);
+    form::Cage r;
+    ASSERT_TRUE(r.deserialize(c.serialize()));
+    EXPECT_EQ(r.symAxis, 0);
+}
