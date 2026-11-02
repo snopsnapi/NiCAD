@@ -1279,6 +1279,9 @@ private:
     std::vector<int> m_imTouchNewFolderBodies;
     // im-touch only: the Fusion-style history timeline along the bottom edge.
     bool m_imTouchTimeline = true;
+    // Fork: Fusion-style workspace tab of the im-touch tool rail
+    // (0 = Solid, 1 = Surface; Form later). Persisted.
+    int m_imTouchWorkspace = 0;
     // im-touch timeline: step whose properties popup is open (-1 = none).
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.

@@ -211,6 +211,38 @@ void Application::renderImTouchLayout() {
                 ImGui::OpenPopup("##TouchTabs");
             renderTouchTabsSheet();
         }
+
+        // Fork: Fusion-style workspace tabs. They pick which tools the left
+        // rail offers (see the rail below); a sketch has its own tool set.
+        if (!m_inSketchMode) {
+            ImGui::SameLine(0.0f, 8.0f * s);
+            static const char* const kWorkspaces[] = { "Solid", "Surface" };
+            const char* items[2] = { materializr::tr(kWorkspaces[0]),
+                                     materializr::tr(kWorkspaces[1]) };
+            // segmented() sizes itself to the available width, which an
+            // auto-resizing window doesn't have - give it a fixed-width child
+            // on the same rowBg plate as the chips beside it.
+            float segW = 0.0f;
+            for (const char* it : items)
+                segW += ImGui::CalcTextSize(it).x + 24.0f * s;
+            segW += 16.0f * s;
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            dl->AddRectFilled(p, ImVec2(p.x + segW, p.y + bh),
+                              ImGui::GetColorU32(touchui::rowBg()),
+                              touchui::radius(10.0f * s));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+            if (ImGui::BeginChild("##workspaceTabs", ImVec2(segW, bh), false,
+                                  ImGuiWindowFlags_NoScrollbar |
+                                      ImGuiWindowFlags_NoScrollWithMouse)) {
+                const int ws0 = m_imTouchWorkspace;
+                m_imTouchWorkspace = touchui::segmented("workspace", items, 2, ws0);
+                if (m_imTouchWorkspace != ws0) saveAppSettings();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+        }
     }
     ImGui::End();
 
@@ -846,7 +878,49 @@ void Application::renderImTouchLayout() {
                 // group button doesn't appear at all when none are.
                 std::vector<const Toolbar::RailTool*> multiply, transform, repair;
                 int railIdx = 0;
+                const bool surfaceWs = (m_imTouchWorkspace == 1);
                 for (const auto& t : tools) {
+                    // Fork: workspace tabs. Surface hides the solid-only
+                    // tools; Solid hides the surface-only ones. Everything
+                    // else (transform, copy, split, loft, remove, sketch,
+                    // measure, unknown plugins) shows in both.
+                    const bool surfaceOnly = t.pluginIndex >= 0 && t.label &&
+                        (std::strcmp(t.label, "Patch") == 0 ||
+                         std::strcmp(t.label, "Sew") == 0);
+                    bool solidOnly = false;
+                    if (t.pluginIndex >= 0) {
+                        solidOnly = t.label &&
+                            (std::strcmp(t.label, "Union") == 0 ||
+                             std::strcmp(t.label, "Subtract") == 0 ||
+                             std::strcmp(t.label, "Intersect") == 0);
+                    } else {
+                        switch (t.action) {
+                        case ToolAction::ExtrudeSketch:
+                        case ToolAction::PushPull:
+                        case ToolAction::SubtractSketch:
+                        case ToolAction::Shell:
+                        case ToolAction::ScaleFace:
+                        case ToolAction::Taper:
+                        case ToolAction::Fillet:
+                        case ToolAction::Chamfer:
+                        case ToolAction::EditFilletChamfer:
+                        case ToolAction::Thread:
+                        case ToolAction::EditDiameter:
+                        case ToolAction::OffsetFace:
+                        case ToolAction::ProjectSketch:
+                        case ToolAction::MergeFaces:
+                            solidOnly = true;
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    if (surfaceWs ? solidOnly : surfaceOnly) continue;
+                    // Surface: its core tools sit flat, not in Repair.
+                    if (surfaceWs && (surfaceOnly || t.action == ToolAction::RemoveFace)) {
+                        flatButton(t, railIdx++);
+                        continue;
+                    }
                     if (t.pluginIndex >= 0 && t.label) {
                         if (std::strcmp(t.label, "Linear") == 0 ||
                             std::strcmp(t.label, "Circular") == 0 ||

@@ -107,6 +107,7 @@ void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readBool(kv, "imTouchTree",          s.imTouchTree);
     readBool(kv, "imTouchLiteTimeline",  s.imTouchTimeline);  // legacy key
     readBool(kv, "imTouchTimeline",      s.imTouchTimeline);
+    readIntClamped(kv, "imTouchWorkspace", s.imTouchWorkspace, 0, 1);
     readIntClamped(kv, "touchRightTab",  s.touchRightTab, 0, 1);
     readFloat(kv, "touchRightW",         s.touchRightW);
     readFloat(kv, "touchRailW",          s.touchRailW);
@@ -436,6 +437,7 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
     ofs << "uiLayout = "            << uiLayoutName(s.uiLayout) << "\n";
     ofs << "imTouchTree = "         << (s.imTouchTree ? "true" : "false") << "\n";
     ofs << "imTouchTimeline = "     << (s.imTouchTimeline ? "true" : "false") << "\n";
+    ofs << "imTouchWorkspace = "    << s.imTouchWorkspace << "\n";
     ofs << "touchRightTab = "       << s.touchRightTab       << "\n";
     ofs << "touchRightW = "         << s.touchRightW         << "\n";
     ofs << "touchRailW = "          << s.touchRailW          << "\n";

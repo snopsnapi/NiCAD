@@ -2089,6 +2089,7 @@ AppSettings Application::currentSettings() const {
     s.displayUnit = m_displayUnit;
     s.imTouchTree = m_imTouchTree;
     s.imTouchTimeline = m_imTouchTimeline;
+    s.imTouchWorkspace = m_imTouchWorkspace;
     s.touchRightTab = m_touchRightTab;
     s.touchRightW = m_touchRightW;
     s.touchRailW = m_touchRailW;
@@ -2191,6 +2192,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     applyDisplayUnitChange(s.displayUnit);
     m_imTouchTree = s.imTouchTree;
     m_imTouchTimeline = s.imTouchTimeline;
+    m_imTouchWorkspace = s.imTouchWorkspace;
     m_showFps = s.showFps;
     m_touchRightTab = (s.touchRightTab == 1) ? 1 : 0;
     m_touchRightW = s.touchRightW;
