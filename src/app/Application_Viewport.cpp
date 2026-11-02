@@ -1152,7 +1152,10 @@ void Application::renderViewport() {
                     entry.faces = std::move(faces);
                 }
                 if (entry.faces.empty()) return;
-                m_sketchRenderer->renderFacesFill(entry.faces, shadeColor, 0.12f, view, proj);
+                // Fork: only the sketch being edited shows through bodies.
+                const bool occlude = !(m_inSketchMode && &sk == m_activeSketch.get());
+                m_sketchRenderer->renderFacesFill(entry.faces, shadeColor, 0.12f, view, proj,
+                                                  occlude);
             };
             for (int sid : m_document->getAllSketchIds()) {
                 if (!m_document->isSketchVisible(sid)) continue;
@@ -1180,7 +1183,9 @@ void Application::renderViewport() {
                 std::vector<TopoDS_Face> faces;
                 faces.reserve(filled.size());
                 for (int idx : filled) faces.push_back(regions[idx].face);
-                m_sketchRenderer->renderFacesFill(faces, fillColor, 0.45f, view, proj);
+                const bool occlude = !(m_inSketchMode && &sk == m_activeSketch.get());
+                m_sketchRenderer->renderFacesFill(faces, fillColor, 0.45f, view, proj,
+                                                  occlude);
             };
             for (int sid : m_document->getAllSketchIds()) {
                 if (!m_document->isSketchVisible(sid)) continue;

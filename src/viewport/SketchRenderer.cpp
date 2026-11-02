@@ -84,6 +84,31 @@ void main() {
 // mirrored a_side there. Order per segment:
 //   (A,B,-1) (A,B,+1) (B,A,-1) | (B,A,-1) (B,A,+1) (A,B,-1)
 // i.e. quad corners A-, A+, B+, then A-, B+, B- (no degenerate triangles).
+// Fork: view-projection that pulls every vertex toward the camera by a
+// fraction of its distance (perspective) or by a fraction of the depth range
+// (orthographic). Screen positions are unchanged; only depth moves, so a
+// depth-tested sketch lying ON a body face wins the tie against that face
+// while anything genuinely behind a body stays hidden. Same idea as the
+// grid's u_depthBias, done on the matrix so no shader changes.
+static glm::mat4 cameraBiasedVP(const glm::mat4& view, const glm::mat4& proj) {
+    constexpr float kFrac = 0.0005f;           // as the grid's depth bias
+    glm::mat4 vp = proj * view;
+    if (proj[2][3] != 0.0f) {
+        // Perspective: clip(P') = (1-f) clip(P) + f clip(eye), where the
+        // eye's clip position is proj * (0,0,0,1) = proj[3].
+        glm::mat4 eye(0.0f);
+        eye[3] = proj[3];
+        return vp * (1.0f - kFrac) + eye * kFrac;
+    }
+    // Orthographic: shift by d along +Z eye (toward the camera); depth is
+    // linear, so a small fraction of (far - near) is plenty.
+    if (std::abs(proj[2][2]) > 1e-12f) {
+        const float range = 2.0f / std::abs(proj[2][2]);   // far - near
+        vp[3] += proj[2] * (range * kFrac * 0.02f);
+    }
+    return vp;
+}
+
 static void expandLinesWide(const std::vector<float>& verts, std::vector<float>& out) {
     out.clear();
     const size_t segs = verts.size() / 6;
@@ -499,7 +524,16 @@ void SketchRenderer::render(const Sketch* sketch, const SketchTool* tool,
     // present) keeps the live path below - it changes every frame anyway,
     // and its overlays depend on transient tool state.
     if (!tool && !solver) {
-        renderCachedStatic(sketch, vp);
+        // Fork: a sketch that is not being edited is hidden by the bodies in
+        // front of it (it used to draw through them). Depth-tested without
+        // writing depth, pulled slightly toward the camera so a sketch on a
+        // body face still shows on that face.
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+        renderCachedStatic(sketch, cameraBiasedVP(view, projection));
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
         m_pointLut.clear();
         m_lutSketch = nullptr;
         glEnable(GL_DEPTH_TEST);
@@ -1478,7 +1512,8 @@ void SketchRenderer::renderRegionFill(const Sketch* sketch, int regionIndex,
 void SketchRenderer::renderFacesFill(const std::vector<TopoDS_Face>& faces,
                                      const glm::vec3& color, float alpha,
                                      const glm::mat4& view,
-                                     const glm::mat4& projection) {
+                                     const glm::mat4& projection,
+                                     bool occlude) {
     if (!m_program) return;
     std::vector<float> verts;
     for (const TopoDS_Face& face : faces) {
@@ -1512,8 +1547,15 @@ void SketchRenderer::renderFacesFill(const std::vector<TopoDS_Face>& faces,
     }
     if (verts.empty()) return;
 
-    glm::mat4 vp = projection * view;
-    glDisable(GL_DEPTH_TEST);
+    glm::mat4 vp = occlude ? cameraBiasedVP(view, projection)
+                           : projection * view;
+    if (occlude) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -1529,6 +1571,10 @@ void SketchRenderer::renderFacesFill(const std::vector<TopoDS_Face>& faces,
     glDrawArrays(GL_TRIANGLES, 0, static_cast<int>(verts.size() / 3));
     glBindVertexArray(0);
     glUseProgram(0);
+    if (occlude) {
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+    }
     glEnable(GL_DEPTH_TEST);
 }
 
