@@ -242,6 +242,7 @@ add_executable(materializr
     src/i18n.cpp
     src/app/InteractiveOpController.cpp
     src/app/FaceOpControllers.cpp
+    src/app/TrimSurfaceController.cpp
     src/app/ExtrudeController.cpp
     src/app/PushPullController.cpp
     src/app/PushPullPreview.cpp
@@ -381,6 +382,8 @@ add_executable(materializr
     src/modeling/Sketch.cpp
     src/modeling/FitSpline.cpp
     src/modeling/SurfaceOps.cpp
+    src/modeling/SurfaceExtrudeOp.cpp
+    src/modeling/TrimSurfaceOp.cpp
     src/modeling/Unfold.cpp
     src/modeling/SketchSolver.cpp
     src/modeling/AirfoilImport.cpp

@@ -4,6 +4,7 @@
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <GProp_GProps.hxx>
 #include <TopoDS.hxx>
+#include <TopExp_Explorer.hxx>
 #include <imgui.h>
 #include "../i18n.h"
 #include "../i18n.h"
@@ -38,9 +39,17 @@ bool SweepOp::execute(Document& doc) {
         // produce a null, empty, or topologically invalid shape that would
         // later crash tessellation/boolean/save.
         if (sweptShape.IsNull()) return false;
-        GProp_GProps gp;
-        BRepGProp::VolumeProperties(sweptShape, gp);
-        if (gp.Mass() < 1e-6) return false;
+        // Fork: a curve profile sweeps a SURFACE (no volume to check); only
+        // a solid result gets the zero-volume gate.
+        if (TopExp_Explorer(sweptShape, TopAbs_SOLID).More()) {
+            GProp_GProps gp;
+            BRepGProp::VolumeProperties(sweptShape, gp);
+            if (gp.Mass() < 1e-6) return false;
+        } else {
+            GProp_GProps gp;
+            BRepGProp::SurfaceProperties(sweptShape, gp);
+            if (gp.Mass() < 1e-9) return false;
+        }
         if (!BRepCheck_Analyzer(sweptShape).IsValid()) return false;
         doc.addOrPutBody(m_createdBodyId, sweptShape, "Sweep");
 

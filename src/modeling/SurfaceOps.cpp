@@ -13,6 +13,8 @@
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <gp_Lin.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -140,6 +142,24 @@ TopoDS_Shape splitByTool(const TopoDS_Shape& target, const TopoDS_Shape& tool) {
         return sp.Shape();
     } catch (...) {
         return TopoDS_Shape();
+    }
+}
+
+bool pickPoint(const TopoDS_Shape& shape, const gp_Pnt& origin, const gp_Dir& dir,
+               gp_Pnt& hit) {
+    if (shape.IsNull()) return false;
+    try {
+        IntCurvesFace_ShapeIntersector inter;
+        inter.Load(shape, 1e-6);
+        inter.Perform(gp_Lin(origin, dir), 0.0, 1e12);
+        if (!inter.IsDone() || inter.NbPnt() < 1) return false;
+        int best = 1;
+        for (int i = 2; i <= inter.NbPnt(); ++i)
+            if (inter.WParameter(i) < inter.WParameter(best)) best = i;
+        hit = inter.Pnt(best);
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 

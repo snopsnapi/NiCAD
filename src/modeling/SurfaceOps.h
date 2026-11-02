@@ -10,6 +10,7 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Vec.hxx>
 #include <vector>
 
@@ -46,6 +47,10 @@ TopoDS_Shape splitByTool(const TopoDS_Shape& target, const TopoDS_Shape& tool);
 // back as removeFacesOpen does. Null when the split fails or nothing is left.
 TopoDS_Shape trim(const TopoDS_Shape& target, const TopoDS_Shape& tool,
                   const std::vector<gp_Pnt>& removeAt);
+
+// First hit of the ray (origin, dir) on `shape`'s faces; false on a miss.
+bool pickPoint(const TopoDS_Shape& shape, const gp_Pnt& origin, const gp_Dir& dir,
+               gp_Pnt& hit);
 
 // The face of `shape` nearest `p` (null when the shape has no faces).
 TopoDS_Face nearestFace(const TopoDS_Shape& shape, const gp_Pnt& p);

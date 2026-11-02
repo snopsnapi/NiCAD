@@ -5,6 +5,10 @@
 #include "../core/Document.h"
 #include "../core/History.h"
 #include "../core/Operation.h"
+#include "../modeling/SurfaceExtrudeOp.h"
+#include "../modeling/Sketch.h"
+#include <BRep_Builder.hxx>
+#include <TopoDS_Compound.hxx>
 #include "../core/SelectionManager.h"
 #include "../modeling/CutTargetPick.h"
 #include "../core/NumParse.h"
@@ -128,6 +132,27 @@ bool ExtrudeController::beginExtrude(const IopContext& ctx,
     return begin(ctx);
 }
 
+bool ExtrudeController::beginSurfaceExtrude(const IopContext& ctx, int sketchId) {
+    auto sk = ctx.doc.getSketch(sketchId);
+    if (!sk) return false;
+    const std::vector<TopoDS_Wire> wires = sk->buildCurveWires();
+    if (wires.empty()) {
+        if (ctx.toast) ctx.toast(materializr::tr("This sketch has no curves to extrude."));
+        return false;
+    }
+    BRep_Builder b;
+    TopoDS_Compound c;
+    b.MakeCompound(c);
+    for (const TopoDS_Wire& w : wires) b.Add(c, w);
+    m_profile = c;
+    m_mode = ExtrudeMode::NewBody;
+    m_targetBody = -1;
+    m_sketchId = sketchId;
+    m_surface = true;
+    if (!begin(ctx)) { m_surface = false; return false; }
+    return true;
+}
+
 bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex) {
     const auto* op = dynamic_cast<const ExtrudeOp*>(ctx.history.getStep(historyIndex));
     if (!op || op->getProfile().IsNull()) return false;
@@ -137,6 +162,7 @@ bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex
     m_sketchId = op->getSketchId();
     m_origOpDistance = op->getDistance();
     m_editingIndex = historyIndex;
+    m_surface = dynamic_cast<const SurfaceExtrudeOp*>(op) != nullptr;
     if (!begin(ctx)) {
         m_editingIndex = -1;
         return false;
@@ -173,6 +199,20 @@ int ExtrudeController::onBegin(const IopContext& ctx) {
         if (norm.Magnitude() > 1e-10)
             m_normal = glm::normalize(glm::vec3(norm.X(), norm.Y(), norm.Z()));
         m_origin = glm::vec3(center.X(), center.Y(), center.Z());
+    } else if (m_sketchId >= 0) {
+        // Curves only (Surface Extrude): the sketch plane gives the normal,
+        // the curves' bounding-box centre the arrow's foot.
+        if (auto sk = ctx.doc.getSketch(m_sketchId)) {
+            const gp_Dir n = sk->getPlane().Position().Direction();
+            m_normal = glm::vec3(n.X(), n.Y(), n.Z());
+        }
+        Bnd_Box bb;
+        BRepBndLib::Add(m_profile, bb);
+        if (!bb.IsVoid()) {
+            double x0, y0, z0, x1, y1, z1;
+            bb.Get(x0, y0, z0, x1, y1, z1);
+            m_origin = glm::vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5);
+        }
     }
     // Point the on-screen arrow INTO the material for a Subtract, so dragging
     // toward it deepens the cut. A face sketch gets that for free - its normal
@@ -219,6 +259,12 @@ std::unique_ptr<Operation> ExtrudeController::buildOp(const IopContext& ctx) {
     (void)ctx;
     // The live instance. Always NewBody - the user watches the tool volume
     // being swept; Subtract's real boolean is buildCommitOp's job.
+    if (m_surface) {
+        auto sop = std::make_unique<SurfaceExtrudeOp>();
+        sop->setDistance(opDistance());
+        sop->setSketchSource(m_sketchId);
+        return sop;
+    }
     auto op = std::make_unique<ExtrudeOp>();
     op->setProfile(m_profile);
     op->setDistance(opDistance());
@@ -632,6 +678,7 @@ void ExtrudeController::onCleanup() {
     m_editingIndex = -1;
     m_origOpDistance = 0.0;
     m_editPreview.clear();
+    m_surface = false;
 }
 
 } // namespace materializr

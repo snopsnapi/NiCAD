@@ -1,3 +1,5 @@
+#include <BRepAdaptor_CompCurve.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include "../touch_mode.h"
 #include "../ui_scale.h"
 #include "gl_common.h"
@@ -933,6 +935,7 @@ void Application::beginLoft() {
     m_loftRails.clear();
     m_loftRailsMode = false;
     int unusable = 0;
+    bool openCurveLoft = false;   // fork: sections are open curves -> surface
     // All sections faces of ONE body -> the loft can bridge into that body
     // (consume the faces, sew, one solid) instead of adding a separate body
     // that can never be unioned. See LoftOp::setBridge.
@@ -1003,6 +1006,28 @@ void Application::beginLoft() {
                 "%d open sketch(es) ignored - rails need exactly ONE closed base profile.",
                 static_cast<int>(m_loftRails.size())));
         m_loftRails.clear();
+    } else if (m_loftSections.empty() && m_loftRails.size() >= 2) {
+        // Fork (Surface workspace): only open curves - loft a SURFACE through
+        // them, each sketch's longest exact curve chain as a section.
+        for (const LoftRail& r : m_loftRails) {
+            LoftSection sec;
+            sec.sketchId = r.sketchId;
+            sec.outer = r.wire;
+            if (auto sk = m_document->getSketch(r.sketchId)) {
+                double bestLen = -1.0;
+                for (const TopoDS_Wire& w : sk->buildCurveWires()) {
+                    double len = 0.0;
+                    try {
+                        BRepAdaptor_CompCurve cc(w);
+                        len = GCPnts_AbscissaPoint::Length(cc);
+                    } catch (...) {}
+                    if (len > bestLen) { bestLen = len; sec.outer = w; }
+                }
+            }
+            m_loftSections.push_back(std::move(sec));
+        }
+        m_loftRails.clear();
+        openCurveLoft = true;
     } else {
         const bool tooManyRails =
             m_loftSections.size() == 1 && m_loftRails.size() > 2;
@@ -1021,7 +1046,8 @@ void Application::beginLoft() {
     if (unusable > 0)
         showToast(materializr::trFormat("%d empty sketch(es) skipped.", static_cast<int>(unusable)));
 
-    m_loftSolid = true;
+    // Fork: open-curve sections, or the Surface workspace, loft a surface.
+    m_loftSolid = !(openCurveLoft || m_imTouchWorkspace == 1);
     m_loftRuled = false;
     m_loftPreview.clear(*m_document);
     m_loftActive = true;

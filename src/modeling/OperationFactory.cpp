@@ -1,6 +1,8 @@
 #include "OperationFactory.h"
 #include "PlaneTransformOp.h"
 #include "SweepOp.h"
+#include "SurfaceExtrudeOp.h"
+#include "TrimSurfaceOp.h"
 #include "LoftOp.h"
 #include "GuidedLoftOp.h"
 #include "BoundaryFillOp.h"
@@ -61,6 +63,8 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     //     plane/axis + its document id, so reloaded steps undo/redo cleanly.
     if (typeId == "pattern")  return std::make_unique<PatternOp>();
     if (typeId == "extrude")  return std::make_unique<ExtrudeOp>();
+    if (typeId == "surface_extrude") return std::make_unique<SurfaceExtrudeOp>();
+    if (typeId == "trim_surface")    return std::make_unique<TrimSurfaceOp>();
     if (typeId == "pushpull") return std::make_unique<PushPullOp>();
     if (typeId == "moveface") return std::make_unique<MoveFaceOp>();
     if (typeId == "combine_sketches") return std::make_unique<CombineSketchesOp>();

@@ -65,7 +65,7 @@ public:
     // id instead of minting a new one every frame.
     int createdBodyId() const { return m_createdBodyId; }
 
-private:
+protected:   // fork: SurfaceExtrudeOp reuses the distance / created-body state
     // The commit's progress reporter as a sink for the boolean's time box, or
     // empty when none is set (headless, preview worker, history replay).
     std::function<bool(float, const char*)> progressSink() {

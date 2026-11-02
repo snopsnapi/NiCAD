@@ -53,7 +53,9 @@ enum class ToolAction {
     // Fusion-style Constraints menu (ТЗ-21, touch only): opens the popup with
     // the two-tap constraint tools (Tangent / Parallel / Perpendicular / Fix /
     // G2). Activates SketchToolMode::Constrain.
-    SketchConstrainMenu
+    SketchConstrainMenu,
+    // Fork: Surface workspace commands (command-first rail).
+    SurfaceExtrude, Sweep, TrimSurface
 };
 
 class Toolbar {

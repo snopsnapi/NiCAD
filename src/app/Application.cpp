@@ -82,6 +82,11 @@ inline void resetFpuForOcct() {
 #include "ui/MeasureTool.h"
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
+#include "modeling/SweepOp.h"
+#include <BRep_Builder.hxx>
+#include <TopoDS_Compound.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
+#include <BRepAdaptor_CompCurve.hxx>
 #include "viewport/GridScale.h"
 #include "modeling/ThreadOp.h"
 #include "modeling/CopyOp.h"
@@ -2655,6 +2660,81 @@ void Application::handleToolAction(int action) {
             applySketchConstraint(ConstraintType::Tangent); break;
         case ToolAction::SketchConstrainConcentric:
             applySketchConstraint(ConstraintType::Concentric); break;
+        // ── Fork: Surface workspace commands ────────────────────────────
+        case ToolAction::SurfaceExtrude: {
+            int sid = -1;
+            for (const auto& e : m_selection->getSelection())
+                if ((e.type == SelectionType::Sketch ||
+                     e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                    sid = e.sketchId; break;
+                }
+            if (sid < 0) break;
+            cancelAllInteractivePreviews();
+            m_extrudeCtl.beginSurfaceExtrude(iopContext(), sid);
+            m_meshesDirty = true;
+            break;
+        }
+        case ToolAction::Sweep: {
+            // Profile = the first sketch picked, path = the second. In the
+            // Solid workspace a profile with closed regions sweeps into a
+            // solid; otherwise (or in Surface) its curves sweep a surface.
+            std::vector<int> sids;
+            for (const auto& e : m_selection->getSelection()) {
+                if ((e.type != SelectionType::Sketch &&
+                     e.type != SelectionType::SketchRegion) || e.sketchId < 0) continue;
+                if (std::find(sids.begin(), sids.end(), e.sketchId) == sids.end())
+                    sids.push_back(e.sketchId);
+            }
+            if (sids.size() < 2) {
+                showToast(materializr::tr("Sweep needs two sketches: the profile first, then the path."));
+                break;
+            }
+            auto profSk = m_document->getSketch(sids[0]);
+            auto pathSk = m_document->getSketch(sids[1]);
+            if (!profSk || !pathSk) break;
+            // Path: the longest curve chain of the second sketch.
+            TopoDS_Wire path;
+            double bestLen = -1.0;
+            for (const TopoDS_Wire& w : pathSk->buildCurveWires()) {
+                double len = 0.0;
+                try {
+                    BRepAdaptor_CompCurve cc(w);
+                    len = GCPnts_AbscissaPoint::Length(cc);
+                } catch (...) {}
+                if (len > bestLen) { bestLen = len; path = w; }
+            }
+            TopoDS_Shape profile;
+            if (m_imTouchWorkspace != 1) profile = profSk->buildProfileShape();
+            if (profile.IsNull()) {
+                const std::vector<TopoDS_Wire> wires = profSk->buildCurveWires();
+                if (wires.size() == 1) {
+                    profile = wires.front();
+                } else if (!wires.empty()) {
+                    BRep_Builder b;
+                    TopoDS_Compound c;
+                    b.MakeCompound(c);
+                    for (const TopoDS_Wire& w : wires) b.Add(c, w);
+                    profile = c;
+                }
+            }
+            if (path.IsNull() || profile.IsNull()) {
+                showToast(materializr::tr("Sweep: the sketches need curves - a profile and a path."));
+                break;
+            }
+            auto trackBodies = trackBodyChanges();
+            auto op = std::make_unique<SweepOp>();
+            op->setProfile(profile);
+            op->setPath(path);
+            if (!m_history->pushOperation(std::move(op), *m_document))
+                showToast(materializr::tr("Sweep failed - check that the path starts at the profile and doesn't fold back on itself."));
+            else
+                m_selection->clear();
+            markDirty();
+            break;
+        }
+        case ToolAction::TrimSurface:
+            beginIop(m_trimSurfaceCtl);
+            break;
         case ToolAction::SketchConstrainMenu:
             // ТЗ-21: the touch rail's Constraints button always opens the menu
             // (switch tool there; tapping the active item leaves the mode).

@@ -121,6 +121,8 @@ const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", k
 const WsCmd kCmdRemove  {MZ_ICON_REPAIR,  "Remove",  ToolAction::RemoveFace, nullptr, kSelF, 1, false};
 const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::None, "Delete", kSelB, 1, false};
 const WsCmd kCmdMeasure {MZ_ICON_MEASURE, "Measure", ToolAction::Measure, nullptr, 0, 0, false};
+// Sweep: the profile sketch first, then the path sketch.
+const WsCmd kCmdSweep   {MZ_ICON_SPLINE,  "Sweep",   ToolAction::Sweep, nullptr, kSelS | kSelR, 2, false};
 
 const std::vector<WsGroup>& solidWorkspace() {
     static const std::vector<WsGroup> g = {
@@ -134,6 +136,7 @@ const std::vector<WsGroup>& solidWorkspace() {
         {"Create", MZ_ICON_LATHE, {
             {MZ_ICON_LATHE,    "Revolve", ToolAction::Revolve, nullptr, kSelS | kSelR, 1, true},
             kCmdLoft,
+            kCmdSweep,
         }},
         {"Modify", MZ_ICON_SHELL, {
             {MZ_ICON_SHELL,    "Shell",       ToolAction::Shell, nullptr, kSelF, 1, false},
@@ -166,16 +169,21 @@ const std::vector<WsGroup>& surfaceWorkspace() {
     static const std::vector<WsGroup> g = {
         {nullptr, nullptr, {
             kCmdSketch,
+            {MZ_ICON_EXTRUDE, "Extrude", ToolAction::SurfaceExtrude, nullptr, kSelS | kSelR, 1, true},
             kCmdLoft,
+            kCmdSweep,
             {MZ_ICON_PATCH, "Patch", ToolAction::None, "Patch", kSelE, 1, false},
+            // Trim: the body to trim first, then the tool (body or sketch).
+            {MZ_ICON_TRIM,  "Trim",  ToolAction::TrimSurface, nullptr, kSelB | kSelS | kSelR, 2, false},
             {MZ_ICON_SEW,   "Sew",   ToolAction::None, "Sew", kSelB, 1, false},
             kCmdRemove,
-            kCmdSplit,
+        }},
+        {"Edit", MZ_ICON_MOVE, {
             kCmdMove,
             kCmdMirror,
-            kCmdDelete,
-            kCmdMeasure,
+            kCmdSplit,
         }},
+        {nullptr, nullptr, { kCmdDelete, kCmdMeasure }},
     };
     return g;
 }
@@ -1451,7 +1459,7 @@ void Application::renderImTouchLayout() {
                     handled = m_edgeCtl.active();
                 }
                 if (!handled && op->isEnabled() && i <= curr &&
-                    op->typeId() == "extrude")
+                    (op->typeId() == "extrude" || op->typeId() == "surface_extrude"))
                     handled = beginInteractiveExtrudeEdit(i);
                 if (!handled) {
                     m_imTouchHistoryEdit = i;

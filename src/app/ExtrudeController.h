@@ -41,6 +41,9 @@ public:
     // HistoryEditPreview); Cancel restores the original distance. False when
     // the step is not a live ExtrudeOp.
     bool beginExtrudeEdit(const IopContext& ctx, int historyIndex);
+    // Fork: Surface Extrude - every curve of the sketch swept into a
+    // surface body (SurfaceExtrudeOp), same arrow and well.
+    bool beginSurfaceExtrude(const IopContext& ctx, int sketchId);
     bool editing() const { return m_editingIndex >= 0; }
 
     // The arrow's frame - Application still DRAWS the dimension arrow (it
@@ -141,6 +144,7 @@ private:
     // distance when the edit began, put back on cancel / failed commit.
     int m_editingIndex = -1;
     double m_origOpDistance = 0.0;
+    bool m_surface = false;   // building a SurfaceExtrudeOp
     HistoryEditPreview m_editPreview;
     // Write opDistance() into the edited op (no replay).
     void writeEditDistance(const IopContext& ctx, double d) const;

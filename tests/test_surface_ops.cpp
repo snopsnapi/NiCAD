@@ -3,6 +3,12 @@
 
 #include "modeling/SurfaceOps.h"
 #include "modeling/Sketch.h"
+#include "core/Document.h"
+#include "modeling/DefeatureOp.h"
+#include "modeling/SurfaceExtrudeOp.h"
+#include "modeling/SweepOp.h"
+#include "modeling/TrimSurfaceOp.h"
+#include <memory>
 
 #include <gtest/gtest.h>
 
@@ -163,4 +169,75 @@ TEST(SurfaceOps, SketchCurveWires) {
         const TopoDS_Shape s = surf::extrudeCurves({w}, gp_Vec(0, 0, 3));
         EXPECT_NEAR(area(s), 15.0 * 3.0, 1e-6);
     }
+}
+
+// The operations on a real Document: Delete Face without Heal opens the box
+// (undo closes it again), and the Heal flag survives a save round trip.
+TEST(SurfaceOpsDoc, DeleteFaceWithoutHeal) {
+    Document doc;
+    const int id = doc.addBody(BRepPrimAPI_MakeBox(10, 10, 10).Shape(), "box");
+    DefeatureOp op;
+    op.setBody(id);
+    op.setHeal(false);
+    TopExp_Explorer ex(doc.getBody(id), TopAbs_FACE);
+    op.addFace(TopoDS::Face(ex.Current()));
+    ASSERT_TRUE(op.execute(doc));
+    EXPECT_NEAR(area(doc.getBody(id)), 500.0, 1e-6);
+    EXPECT_EQ(count(doc.getBody(id), TopAbs_SOLID), 0);
+    ASSERT_TRUE(op.undo(doc));
+    EXPECT_NEAR(area(doc.getBody(id)), 600.0, 1e-6);
+    DefeatureOp re;
+    ASSERT_TRUE(re.deserializeParams(op.serializeParams()));
+    EXPECT_FALSE(re.heal());
+}
+
+// Surface Extrude of an open sketch line (10 mm, 6 mm up) and a Trim of that
+// sheet by a second sketch's line at x = 4: the tapped piece (x < 4) goes,
+// 6 x 6 remains; undo restores the sheet.
+TEST(SurfaceOpsDoc, SurfaceExtrudeThenTrim) {
+    Document doc;
+    auto sk = std::make_shared<Sketch>();
+    sk->addLine(sk->addPoint(glm::vec2(0, 0)), sk->addPoint(glm::vec2(10, 0)));
+    const int sid = doc.addSketch(sk);
+    SurfaceExtrudeOp ex;
+    ex.setSketchSource(sid);
+    ex.setDistance(6.0);
+    ASSERT_TRUE(ex.execute(doc));
+    const int body = ex.createdBodyId();
+    ASSERT_GE(body, 0);
+    EXPECT_NEAR(area(doc.getBody(body)), 60.0, 1e-6);
+    SurfaceExtrudeOp exRe;
+    ASSERT_TRUE(exRe.deserializeParams(ex.serializeParams()));
+    EXPECT_EQ(exRe.getSketchId(), sid);
+    EXPECT_NEAR(exRe.getDistance(), 6.0, 1e-9);
+
+    auto cutSk = std::make_shared<Sketch>();
+    cutSk->addLine(cutSk->addPoint(glm::vec2(4, -5)), cutSk->addPoint(glm::vec2(4, 5)));
+    const int cutId = doc.addSketch(cutSk);
+    TrimSurfaceOp trim;
+    trim.setTarget(body);
+    trim.setToolSketch(cutId);
+    trim.setRemovePoints({gp_Pnt(1, 0, 3)});
+    ASSERT_TRUE(trim.execute(doc));
+    EXPECT_NEAR(area(doc.getBody(body)), 36.0, 1e-6);
+    ASSERT_TRUE(trim.undo(doc));
+    EXPECT_NEAR(area(doc.getBody(body)), 60.0, 1e-6);
+    TrimSurfaceOp trimRe;
+    ASSERT_TRUE(trimRe.deserializeParams(trim.serializeParams()));
+    EXPECT_EQ(trimRe.targetId(), body);
+}
+
+// SweepOp accepts a curve profile and makes a surface body.
+TEST(SurfaceOpsDoc, SweepCurveProfile) {
+    Document doc;
+    SweepOp op;
+    op.setProfile(lineWire(gp_Pnt(0, 0, 0), gp_Pnt(4, 0, 0)));
+    op.setPath(lineWire(gp_Pnt(0, 0, 0), gp_Pnt(0, 0, 12)));
+    ASSERT_TRUE(op.execute(doc));
+    int n = 0;
+    for (int id : doc.getAllBodyIds()) {
+        ++n;
+        EXPECT_NEAR(area(doc.getBody(id)), 48.0, 1e-6);
+    }
+    EXPECT_EQ(n, 1);
 }
