@@ -48,6 +48,7 @@ REGISTER_PLUGIN(Loft, [](materializr::PluginContext& ctx) {
         // through to the "pick another profile" hint and never opened the
         // popup, even though the button was offered for it.
         int faceCount = 0;
+        int curveBodies = 0;   // fork: 3D curves (Spline 3D) are sections/rails too
         std::vector<TopoDS_Shape> seenFaces;
         for (const auto& e : sel) {
             if ((e.type == SelectionType::Sketch ||
@@ -58,10 +59,12 @@ REGISTER_PLUGIN(Loft, [](materializr::PluginContext& ctx) {
                 bool dup = false;
                 for (const auto& f : seenFaces) if (f.IsSame(e.shape)) { dup = true; break; }
                 if (!dup) { seenFaces.push_back(e.shape); ++faceCount; }
+            } else if (e.type == SelectionType::Body && e.bodyId >= 0) {
+                ++curveBodies;
             }
         }
 
-        if (static_cast<int>(sketchIds.size()) + faceCount < 2) {
+        if (static_cast<int>(sketchIds.size()) + faceCount + curveBodies < 2) {
             ctx.requestInteractiveOp(materializr::InteractiveOp::LoftPickSecond);
             return;
         }

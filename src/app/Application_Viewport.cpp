@@ -8526,6 +8526,7 @@ void Application::renderViewport() {
     renderScalePanel();
     renderRotatePanel();
     renderMovePanel();
+    renderCurvePointPanel();   // fork: Studio Spline point conditions
 
     // Sketch mode indicator
     if (m_inSketchMode) {

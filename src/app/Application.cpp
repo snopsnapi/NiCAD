@@ -2756,6 +2756,9 @@ void Application::handleToolAction(int action) {
         case ToolAction::StudioSpline:
             beginIop(m_studioSplineCtl);
             break;
+        case ToolAction::CurvePointCondition:
+            applyCurvePointCondition();
+            break;
         case ToolAction::SketchConstrainMenu:
             // ТЗ-21: the touch rail's Constraints button always opens the menu
             // (switch tool there; tapping the active item leaves the mode).
@@ -8539,8 +8542,14 @@ void Application::run() {
             const bool undoTap = m_window->consumeUndoTap();
             const bool redoTap = m_window->consumeRedoTap();
             if (!anyInteractivePreviewActive()) {
-                if (undoTap && m_history->canUndo()) {
+                if (undoTap && paramUndoAvailable()) {
+                    paramUndo();   // fork: a curve-point move / step edit first
+                    m_wakeFrames = std::max(m_wakeFrames, 5);
+                } else if (undoTap && m_history->canUndo()) {
                     undoWithCascade();
+                    m_wakeFrames = std::max(m_wakeFrames, 5);
+                } else if (redoTap && paramRedoAvailable()) {
+                    paramRedo();
                     m_wakeFrames = std::max(m_wakeFrames, 5);
                 } else if (redoTap && m_history->canRedo()) {
                     redoWithCascade();

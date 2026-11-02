@@ -6,20 +6,25 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Wire.hxx>
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <imgui.h>
 #include "../i18n.h"
 
 TopoDS_Shape StudioSplineOp::buildCurve(const std::vector<gp_Pnt>& pts, bool closed,
-                                        const gp_Vec& startTan, const gp_Vec& endTan) {
+                                        const gp_Vec& startTan, const gp_Vec& endTan,
+                                        const std::vector<PointCond>& conds) {
     if (pts.size() < 2) return TopoDS_Shape();
     std::vector<glm::dvec3> p3;
+    std::vector<PointCond> c3;   // conditions of the points kept
     p3.reserve(pts.size());
-    for (const gp_Pnt& p : pts) {
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const gp_Pnt& p = pts[i];
         // Coincident neighbours make the chord parameters degenerate.
         if (!p3.empty() && glm::length(glm::dvec3(p.X(), p.Y(), p.Z()) - p3.back()) < 1e-7)
             continue;
         p3.emplace_back(p.X(), p.Y(), p.Z());
+        c3.push_back(i < conds.size() ? conds[i] : PointCond());
     }
     if (p3.size() < 2) return TopoDS_Shape();
     try {
@@ -32,6 +37,26 @@ TopoDS_Shape StudioSplineOp::buildCurve(const std::vector<gp_Pnt>& pts, bool clo
             double chord = 0.0;
             for (size_t i = 1; i < p3.size(); ++i) chord += glm::length(p3[i] - p3[i - 1]);
             std::vector<materializr::fitspline::Constraint> cons;
+            const int n = static_cast<int>(p3.size());
+            // Point conditions. A direction is aligned with the curve's run
+            // through that point (neighbour to neighbour), so G1 never folds
+            // the curve back on itself.
+            for (int i = 0; i < n; ++i) {
+                const PointCond& pc = c3[static_cast<size_t>(i)];
+                if (pc.type == Cond::Free || pc.dir.Magnitude() < 1e-9) continue;
+                if ((i == 0 && startTan.Magnitude() > 1e-9) ||
+                    (i == n - 1 && endTan.Magnitude() > 1e-9)) continue;
+                const glm::dvec3 run = p3[static_cast<size_t>(std::min(i + 1, n - 1))] -
+                                       p3[static_cast<size_t>(std::max(i - 1, 0))];
+                gp_Vec t = pc.dir.Normalized();
+                if (t.X() * run.x + t.Y() * run.y + t.Z() * run.z < 0.0) t.Reverse();
+                materializr::fitspline::Constraint c;
+                c.index = i;
+                c.d1 = glm::dvec3(t.X(), t.Y(), t.Z()) * chord;
+                if (pc.type == Cond::G2)
+                    c.d2 = glm::dvec3(pc.curv.X(), pc.curv.Y(), pc.curv.Z()) * (chord * chord);
+                cons.push_back(c);
+            }
             if (startTan.Magnitude() > 1e-9) {
                 materializr::fitspline::Constraint c;
                 c.index = 0;
@@ -60,7 +85,7 @@ TopoDS_Shape StudioSplineOp::buildCurve(const std::vector<gp_Pnt>& pts, bool clo
 }
 
 bool StudioSplineOp::execute(Document& doc) {
-    const TopoDS_Shape w = buildCurve(m_points, m_closed, m_startTan, m_endTan);
+    const TopoDS_Shape w = buildCurve(m_points, m_closed, m_startTan, m_endTan, m_conds);
     if (w.IsNull()) return false;
     try {
         doc.addOrPutBody(m_createdBodyId, w, "Spline");
@@ -100,6 +125,14 @@ std::string StudioSplineOp::serializeParams() const {
                   m_closed ? 1 : 0, m_startTan.X(), m_startTan.Y(), m_startTan.Z(),
                   m_endTan.X(), m_endTan.Y(), m_endTan.Z());
     std::string blob = buf;
+    for (size_t i = 0; i < m_conds.size() && i < m_points.size(); ++i) {
+        const PointCond& c = m_conds[i];
+        if (c.type == Cond::Free) continue;
+        std::snprintf(buf, sizeof(buf), ";c%zu=%d:%.9g:%.9g:%.9g:%.9g:%.9g:%.9g", i,
+                      static_cast<int>(c.type), c.dir.X(), c.dir.Y(), c.dir.Z(),
+                      c.curv.X(), c.curv.Y(), c.curv.Z());
+        blob += buf;
+    }
     blob += ";pts=";
     for (size_t i = 0; i < m_points.size(); ++i) {
         std::snprintf(buf, sizeof(buf), "%s%.9g:%.9g:%.9g", i ? "," : "",
@@ -111,6 +144,7 @@ std::string StudioSplineOp::serializeParams() const {
 
 bool StudioSplineOp::deserializeParams(const std::string& blob) {
     bool any = false;
+    m_conds.clear();   // only the listed points carry conditions
     size_t pos = 0;
     auto vec = [](const std::string& v, gp_Vec& out) {
         double x = 0, y = 0, z = 0;
@@ -124,6 +158,19 @@ bool StudioSplineOp::deserializeParams(const std::string& blob) {
         const std::string key = blob.substr(pos, eq - pos);
         const std::string val = blob.substr(eq + 1, end - eq - 1);
         if (key == "closed") { m_closed = (val == "1"); }
+        else if (key.size() > 1 && key[0] == 'c' && key != "closed") {
+            const long idx = std::strtol(key.c_str() + 1, nullptr, 10);
+            int type = 0;
+            double v[6] = {0, 0, 0, 0, 0, 0};
+            if (idx >= 0 && idx < 4096 &&
+                std::sscanf(val.c_str(), "%d:%lf:%lf:%lf:%lf:%lf:%lf", &type, &v[0], &v[1],
+                            &v[2], &v[3], &v[4], &v[5]) == 7 && type >= 1 && type <= 2) {
+                if (m_conds.size() <= static_cast<size_t>(idx)) m_conds.resize(idx + 1);
+                m_conds[idx].type = static_cast<Cond>(type);
+                m_conds[idx].dir = gp_Vec(v[0], v[1], v[2]);
+                m_conds[idx].curv = gp_Vec(v[3], v[4], v[5]);
+            }
+        }
         else if (key == "t0") { vec(val, m_startTan); }
         else if (key == "t1") { vec(val, m_endTan); }
         else if (key == "pts") {
