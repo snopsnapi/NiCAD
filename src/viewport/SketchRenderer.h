@@ -51,9 +51,13 @@ public:
     // The same translucent fill for several planar faces in ONE draw - the
     // Fill tool's persistent fills, drawn every frame for every visible
     // sketch.
+    // `occlude` (fork): depth-test against the bodies (with a small pull
+    // toward the camera so a fill on a body face still shows) instead of
+    // drawing on top of everything - for sketches not being edited.
     void renderFacesFill(const std::vector<TopoDS_Face>& faces,
                          const glm::vec3& color, float alpha,
-                         const glm::mat4& view, const glm::mat4& projection);
+                         const glm::mat4& view, const glm::mat4& projection,
+                         bool occlude = false);
 
     // Highlight every primitive in a sketch (lines, circles, arcs, splines,
     // polygon edges) in a single colour at the given line width - used when
