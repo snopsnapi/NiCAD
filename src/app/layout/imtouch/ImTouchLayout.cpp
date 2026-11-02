@@ -1134,6 +1134,18 @@ void Application::renderImTouchLayout() {
         ImGui::End();
         ImGui::PopStyleVar();
     }
+    // Fork: close the step side panel; `restore` puts the op's parameters
+    // back to their values when the panel opened (Cancel / switching steps).
+    auto closeStepEdit = [&](bool restore) {
+        if (m_imTouchHistoryEdit >= 0 && restore && !m_imTouchStepBackup.empty() &&
+            m_history) {
+            if (const Operation* op = m_history->getStep(m_imTouchHistoryEdit))
+                const_cast<Operation*>(op)->deserializeParams(m_imTouchStepBackup);
+        }
+        m_imTouchHistoryEdit = -1;
+        m_imTouchStepBackup.clear();
+        if (m_historyPanel) m_historyPanel->setEditingStep(-1);
+    };
     if (m_imTouchTimeline && histAvail) {
         const float stripX = histX + railBtnW + histGap;
         ImGui::SetNextWindowPos(ImVec2(stripX, wp.y + ws.y - m),
@@ -1170,7 +1182,18 @@ void Application::renderImTouchLayout() {
             static unsigned s_seenRev = ~0u;
             const bool historyMoved = (s_seenRev != m_history->revision());
 
-            bool wantOpen = false;
+            // Fork: Fusion-style timeline. A tap opens the step the way it
+            // was built - a sketch step enters that sketch, a fillet/chamfer
+            // re-opens its interactive tool - and any other step gets a small
+            // side panel with only its parameters (OK / Cancel). Go Here,
+            // Enable/Disable and Delete moved to a long press on the step.
+            static int s_longPressStep = -1;  // step whose long press opened the menu
+            static int s_menuStep = -1;
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                s_longPressStep = -1;
+            int tapStep = -1;
+            bool openMenu = false;
             for (int i = 0; i < steps; ++i) {
                 const Operation* op = m_history->getStep(i);
                 if (!op) continue;
@@ -1182,117 +1205,78 @@ void Application::renderImTouchLayout() {
                 const bool dim = (i > curr) || !op->isEnabled();
                 std::string stepName = op->name();
                 if (stepName.empty()) stepName = op->typeId();
-                if (touchui::timelineBox("step", stepIcon(op->typeId()),
-                                         i == curr, i == m_imTouchHistoryEdit,
-                                         dim, tint, 0.0f, stepName.c_str())) {
-                    m_imTouchHistoryEdit = (m_imTouchHistoryEdit == i) ? -1 : i;
-                    wantOpen = (m_imTouchHistoryEdit == i);
-                    // Drive the viewport's orange edited-element highlight.
-                    if (m_historyPanel)
-                        m_historyPanel->setEditingStep(m_imTouchHistoryEdit);
+                const bool tapped = touchui::timelineBox(
+                    "step", stepIcon(op->typeId()), i == curr,
+                    i == m_imTouchHistoryEdit, dim, tint, 0.0f, stepName.c_str());
+                // Long press: finger held still on the step for half a second
+                // (or a right-click, should the window's synthetic one land here).
+                if (ImGui::IsItemActive() && s_longPressStep != i &&
+                    ImGui::GetIO().MouseDownDuration[ImGuiMouseButton_Left] > 0.5f &&
+                    !ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                    s_longPressStep = i;
+                    s_menuStep = i;
+                    openMenu = true;
+                } else if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                    s_menuStep = i;
+                    openMenu = true;
+                }
+                if (tapped) {
+                    if (s_longPressStep == i) s_longPressStep = -1; // its release
+                    else tapStep = i;
                 }
                 if (i == curr && historyMoved) ImGui::SetScrollHereX(0.5f);
                 ImGui::PopID();
             }
             s_seenRev = m_history->revision();
 
-            if (wantOpen) ImGui::OpenPopup("##LiteStepProps");
-            // Sized to host an UNFOLDED number pad (TouchWidgets numberField),
-            // not just a column of one-line fields: at the old 360x460 the pad
-            // had to be a popup of its own to fit, which is what put a popup
-            // inside this popup.
-            //
-            // Capped against the VIEWPORT, not a bare constant: a fixed height
-            // that happens to exceed the screen just hides the bottom of the
-            // dialog, which is how the pad's Enter key went missing the first
-            // time. Screen height wins whenever it's the smaller of the two.
-            const float vpH = ImGui::GetMainViewport()->Size.y;
-            const float maxPopupH = std::min(760.0f * s, vpH * 0.88f);
-            ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f * s, 0),
-                                                ImVec2(420.0f * s, maxPopupH));
-            if (ImGui::BeginPopup("##LiteStepProps")) {
-                const Operation* op =
-                    (m_imTouchHistoryEdit >= 0 && m_imTouchHistoryEdit < steps)
-                        ? m_history->getStep(m_imTouchHistoryEdit)
-                        : nullptr;
+            if (tapStep >= 0 && !histLocked) {
+                const int i = tapStep;
+                const Operation* op = m_history->getStep(i);
+                const bool same = (i == m_imTouchHistoryEdit);
+                closeStepEdit(/*restore=*/true);
+                bool handled = same || !op;   // a second tap closes the panel
+                if (!handled && op->isReloaded()) {
+                    showToast(materializr::tr("Restored from an older save - no editable parameters. Undo/redo still work."));
+                    handled = true;
+                }
+                if (!handled) {
+                    if (auto* se = dynamic_cast<const SketchEditOp*>(op)) {
+                        auto tgt = se->getTarget();
+                        const int sid =
+                            tgt ? m_document->findSketchId(tgt.get()) : -1;
+                        if (sid >= 0) {
+                            editSketch(sid);
+                            handled = true;
+                        }
+                    }
+                }
+                if (!handled && op->isEnabled() && i <= curr &&
+                    (op->kind() == Operation::Kind::Fillet ||
+                     op->kind() == Operation::Kind::Chamfer)) {
+                    m_edgeOpPickedBodyId = -1;
+                    beginInteractiveEdgeOpEdit(i);
+                    handled = m_edgeCtl.active();
+                }
+                if (!handled) {
+                    m_imTouchHistoryEdit = i;
+                    m_imTouchStepBackup = op->serializeParams();
+                    if (m_historyPanel) m_historyPanel->setEditingStep(i);
+                }
+            }
+
+            if (openMenu) ImGui::OpenPopup("##LiteStepMenu");
+            if (ImGui::BeginPopup("##LiteStepMenu")) {
+                const Operation* op = (s_menuStep >= 0 && s_menuStep < steps)
+                                          ? m_history->getStep(s_menuStep)
+                                          : nullptr;
                 if (!op) {
                     ImGui::CloseCurrentPopup();
                 } else {
-                    const int i = m_imTouchHistoryEdit;
-                    std::string detail = op->description();
-                    if (detail.empty()) detail = op->name();
-                    ImGui::TextColored(touchui::textPrimary(), "%d. %s",
-                                       i + 1, detail.c_str());
-                    if (!op->isEnabled())
-                        ImGui::TextColored(touchui::textDim(), "%s", materializr::tr("Disabled"));
-                    if (i > curr)
-                        ImGui::TextColored(touchui::textDim(), "%s", materializr::tr("Undone - Go Here replays it."));
-                    if (i == failedAt) {
-                        ImGui::PushTextWrapPos(0.0f);
-                        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", materializr::tr("Couldn't recompute after an upstream change. Edit its parameters, fix the step before it, or delete it."));
-                        ImGui::PopTextWrapPos();
-                    }
-                    ImGui::Separator();
-
-                    if (op->isReloaded()) {
-                        ImGui::PushTextWrapPos(0.0f);
-                        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "%s", materializr::tr("Restored from an older save - no editable parameters. Undo/redo still work."));
-                        ImGui::PopTextWrapPos();
-                    } else {
-                        // The op's own parameter editor - identical widgets to
-                        // the desktop History panel's Properties section.
-                        // An EXPLICIT height, derived from the popup's own cap.
-                        // A fill height (-footerH) reads better but is circular
-                        // here: BeginPopup implies AlwaysAutoResize, so the
-                        // popup sizes to the child while the child sizes to the
-                        // popup, and the result was a short popup anchored
-                        // halfway down the screen with its lower half off it.
-                        const float footerH = 44.0f * s +
-                                              ImGui::GetStyle().ItemSpacing.y * 2.0f;
-                        const float headerH = 80.0f * s;   // title + separator
-                        const float childH =
-                            std::max(200.0f * s, maxPopupH - footerH - headerH);
-                        ImGui::BeginChild("##props", ImVec2(0.0f, childH), true);
-                        ImGui::PushItemWidth(
-                            ImGui::CalcTextSize("0000000").x +
-                            2.0f * (ImGui::GetFrameHeight() +
-                                    ImGui::GetStyle().ItemInnerSpacing.x));
-                        const_cast<Operation*>(op)->renderProperties();
-                        ImGui::PopItemWidth();
-                        ImGui::EndChild();
-                        ImGui::BeginDisabled(histLocked);
-                        if (ImGui::Button(materializr::tr("Apply Changes"),
-                                          ImVec2(-1.0f, 44.0f * s))) {
-                            // Same sequence as HistoryPanel: carry inline
-                            // sketch-dimension edits into later snapshots
-                            // FIRST, then a transactional replay, then cascade
-                            // so bodies built from the sketch follow.
-                            auto trackBodies = trackBodyChanges();
-                            m_history->propagateSketchValueEdits(i, *m_document);
-                            const bool applied = m_history->editStep(
-                                i, *m_document, /*transactional=*/true);
-                            if (applied) {
-                                if (auto* se =
-                                        dynamic_cast<const SketchEditOp*>(op)) {
-                                    auto tgt = se->getTarget();
-                                    int sid = tgt ? m_document->findSketchId(
-                                                        tgt.get())
-                                                  : -1;
-                                    if (sid >= 0) cascadeFromSketchEdit(sid);
-                                } else if (auto* st = dynamic_cast<
-                                               const SketchTransformOp*>(op)) {
-                                    if (st->getSketchId() >= 0)
-                                        cascadeFromSketchEdit(st->getSketchId());
-                                }
-                            }
-                        }
-                        ImGui::EndDisabled();
-                    }
-                    ImGui::Separator();
-
-                    const float bw = 104.0f * s;
+                    const int i = s_menuStep;
+                    const ImVec2 bsz(180.0f * s, 44.0f * s);
                     ImGui::BeginDisabled(histLocked || i == curr);
-                    if (ImGui::Button(materializr::tr("Go Here"), ImVec2(bw, 44.0f * s))) {
+                    if (ImGui::Button(materializr::tr("Go Here"), bsz)) {
+                        closeStepEdit(/*restore=*/true);
                         // Roll the model to this step (Fusion's marker drag).
                         // Progress guard: a failed replay mid-walk must not
                         // spin forever.
@@ -1301,53 +1285,113 @@ void Application::renderImTouchLayout() {
                             undoWithCascade();
                             if (m_history->currentStep() == before) break;
                         }
-                        // No scope here on purpose: redoWithCascade() opens
-                        // its own per step, so each redo already marks exactly
-                        // the bodies it re-derived. The full-rebuild flag that
-                        // used to sit after this loop was laying a whole-project
-                        // re-tessellation on top of correct partial marking.
+                        // redoWithCascade() opens its own per-step scope.
                         while (m_history->currentStep() < i) {
                             const int before = m_history->currentStep();
                             redoWithCascade();
                             if (m_history->currentStep() == before) break;
                         }
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndDisabled();
-                    ImGui::SameLine();
                     ImGui::BeginDisabled(histLocked);
-                    if (ImGui::Button(materializr::tr(op->isEnabled() ? "Disable" : "Enable"),
-                                      ImVec2(bw, 44.0f * s))) {
+                    if (ImGui::Button(materializr::tr(op->isEnabled() ? "Disable" : "Enable"), bsz)) {
+                        closeStepEdit(/*restore=*/true);
                         // In-place toggle - preserves base bodies the op
                         // modifies (replayAll's doc.clear() would drop them).
                         auto trackBodies = trackBodyChanges();
                         m_history->setStepEnabled(i, !op->isEnabled(),
                                                   *m_document);
+                        ImGui::CloseCurrentPopup();
                     }
-                    ImGui::SameLine();
-                    if (ImGui::Button(materializr::tr("Delete"), ImVec2(bw, 44.0f * s))) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
+                    const bool del = ImGui::Button(materializr::tr("Delete"), bsz);
+                    ImGui::PopStyleColor(2);
+                    if (del) {
+                        closeStepEdit(/*restore=*/true);
                         auto trackBodies = trackBodyChanges();
-                        if (m_history->removeStep(i, *m_document)) {
-                            m_imTouchHistoryEdit = -1;
-                            if (m_historyPanel)
-                                m_historyPanel->setEditingStep(-1);
-                            ImGui::CloseCurrentPopup();
-                        } else {
+                        if (!m_history->removeStep(i, *m_document))
                             showToast(materializr::tr(
                                 "Can't delete: a later operation depends on it."));
-                        }
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndDisabled();
                 }
                 ImGui::EndPopup();
-            } else if (m_imTouchHistoryEdit >= 0) {
-                // Popup dismissed by tapping elsewhere - drop the edit state
-                // (and the viewport highlight) with it.
-                m_imTouchHistoryEdit = -1;
-                if (m_historyPanel) m_historyPanel->setEditingStep(-1);
             }
         }
         ImGui::End();
         ImGui::PopStyleColor();
+    }
+
+    // Fork: side panel for the step being edited - only the op's parameter
+    // fields and OK / Cancel. OK replays history from the step; Cancel puts
+    // the parameters back as they were when the panel opened.
+    if (histAvail && m_imTouchHistoryEdit >= 0) {
+        const int i = m_imTouchHistoryEdit;
+        const Operation* op = (i < steps) ? m_history->getStep(i) : nullptr;
+        if (!op) {
+            closeStepEdit(/*restore=*/false);
+        } else {
+            const bool histLocked = anyInteractivePreviewActive();
+            const float panelW = 300.0f * s;
+            const float top = materializr::viewportTopChromeBottom() + 120.0f * s;
+            const float maxH = std::max(200.0f * s, (wp.y + ws.y) - top - 140.0f * s);
+            ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, top), ImGuiCond_Always,
+                                    ImVec2(1.0f, 0.0f));
+            ImGui::SetNextWindowSizeConstraints(ImVec2(panelW, 0.0f), ImVec2(panelW, maxH));
+            ImGui::SetNextWindowBgAlpha(0.95f);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, touchui::panelBg());
+            bool ok = false, cancel = false;
+            if (ImGui::Begin("##LiteStepEdit", nullptr,
+                             kFloat & ~ImGuiWindowFlags_NoScrollbar)) {
+                if (i == m_history->lastReplayFailure())
+                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
+                                       materializr::tr("Failed to recompute"));
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+                const_cast<Operation*>(op)->renderProperties();
+                ImGui::PopItemWidth();
+                ImGui::Spacing();
+                const float gap = ImGui::GetStyle().ItemSpacing.x;
+                const ImVec2 bsz((ImGui::GetContentRegionAvail().x - gap) * 0.5f, 44.0f * s);
+                cancel = ImGui::Button(materializr::tr("Cancel"), bsz);
+                ImGui::SameLine();
+                ImGui::BeginDisabled(histLocked);
+                ImGui::PushStyleColor(ImGuiCol_Button, touchui::accentFill());
+                ok = ImGui::Button(materializr::tr("OK"), bsz);
+                ImGui::PopStyleColor();
+                ImGui::EndDisabled();
+            }
+            ImGui::End();
+            ImGui::PopStyleColor();
+            if (ok) {
+                // Same sequence as HistoryPanel: carry inline sketch-dimension
+                // edits into later snapshots FIRST, then a transactional
+                // replay, then cascade so bodies built from the sketch follow.
+                auto trackBodies = trackBodyChanges();
+                m_history->propagateSketchValueEdits(i, *m_document);
+                const bool applied =
+                    m_history->editStep(i, *m_document, /*transactional=*/true);
+                if (applied) {
+                    if (auto* se = dynamic_cast<const SketchEditOp*>(op)) {
+                        auto tgt = se->getTarget();
+                        int sid = tgt ? m_document->findSketchId(tgt.get()) : -1;
+                        if (sid >= 0) cascadeFromSketchEdit(sid);
+                    } else if (auto* st = dynamic_cast<const SketchTransformOp*>(op)) {
+                        if (st->getSketchId() >= 0)
+                            cascadeFromSketchEdit(st->getSketchId());
+                    }
+                    closeStepEdit(/*restore=*/false);
+                } else {
+                    // A rejected edit was rolled back by History; keep the
+                    // panel so the values can be corrected.
+                    showToast(materializr::tr("Couldn't recompute after an upstream change. Edit its parameters, fix the step before it, or delete it."));
+                }
+            } else if (cancel) {
+                closeStepEdit(/*restore=*/true);
+            }
+        }
     }
 
     // ── fps readout - a small solid chip at the top-centre. Hidden entirely

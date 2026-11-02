@@ -1283,6 +1283,9 @@ private:
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.
     int m_imTouchHistoryEdit = -1;
+    // Fork: params of that step as they were when its side panel opened
+    // (Cancel restores them). Empty = the op has no serialisable params.
+    std::string m_imTouchStepBackup;
     // Center rect the modern/im-touch layouts leave for the viewport window
     // this frame (screen coords, points). Written by renderModernLayout() /
     // renderImTouchLayout(), read by renderViewport() to pin the undocked
