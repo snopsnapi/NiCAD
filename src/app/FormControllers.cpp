@@ -9,6 +9,8 @@
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 #include "../i18n.h"
 
 namespace materializr {
@@ -105,6 +107,22 @@ bool insidePoly(glm::vec2 p, const std::vector<glm::vec2>& poly) {
     }
     return in;
 }
+
+// Angle of the ray's hit on the plane through o with normal ax[k], measured
+// from ax[k+1] toward ax[k+2]. False when the view is edge-on.
+bool ringAngle(const IopViewport& vp, const glm::vec3& o, const glm::vec3 ax[3], int k,
+               float& out) {
+    const glm::vec3 n = ax[k];
+    const float den = glm::dot(vp.rayDir, n);
+    if (std::abs(den) < 0.08f * glm::length(vp.rayDir)) return false;
+    const glm::vec3 hit = vp.rayOrigin + vp.rayDir * (glm::dot(o - vp.rayOrigin, n) / den);
+    const glm::vec3 d = hit - o;
+    out = std::atan2(glm::dot(d, ax[(k + 2) % 3]), glm::dot(d, ax[(k + 1) % 3]));
+    return true;
+}
+
+constexpr float kRingR = 0.72f;   // ring radius, in handle lengths
+constexpr int kRingSegs = 48;
 
 } // namespace
 
@@ -243,6 +261,25 @@ int EditFormController::pickHandle(const IopViewport& vp) const {
         const float d = segDist(vp.mouse, so, st);
         if (d < bd) { bd = d; best = k; }
     }
+    if (best >= 0) return best;
+    // Rotation rings (after the arrows: an arrow crosses its rings).
+    bd = 16.0f * uiScale();
+    for (int k = 0; k < 3; ++k) {
+        const glm::vec3 a = ax[(k + 1) % 3], b = ax[(k + 2) % 3];
+        glm::vec2 prev;
+        bool havePrev = false;
+        for (int i = 0; i <= kRingSegs; ++i) {
+            const float t = 6.2831853f * i / kRingSegs;
+            glm::vec2 q;
+            const bool ok = vp.toScreen(o + (a * std::cos(t) + b * std::sin(t)) * (kRingR * L), q);
+            if (ok && havePrev) {
+                const float d = segDist(vp.mouse, prev, q);
+                if (d < bd) { bd = d; best = 7 + k; }
+            }
+            prev = q;
+            havePrev = ok;
+        }
+    }
     return best;
 }
 
@@ -309,6 +346,10 @@ void EditFormController::onViewportInput(const IopViewport& vp, const IopContext
             m_dragStart = m_cage;
             frame(m_frameO, m_frameAx);
             m_axisTravel = 0.0f;
+            if (m_handle >= 7 && !ringAngle(vp, m_frameO, m_frameAx, m_handle - 7, m_ringStart)) {
+                m_handle = -1;   // edge-on: the ring can't be read
+                setDraggingHandle(false);
+            }
             if (m_handle >= 3 && m_handle <= 5) {
                 const glm::vec3 n = m_frameAx[m_handle - 3];
                 const float den = glm::dot(vp.rayDir, n);
@@ -335,12 +376,20 @@ void EditFormController::onViewportInput(const IopViewport& vp, const IopContext
                 const glm::vec3 d = hit - m_planeStart;
                 t.SetTranslation(gp_Vec(d.x, d.y, d.z));
             }
-        } else {
+        } else if (m_handle == 6) {
             const float f = std::exp((m_pressAt.y - vp.mouse.y) * 0.005f);
             t.SetScale(gp_Pnt(m_frameO.x, m_frameO.y, m_frameO.z), std::clamp(f, 0.02f, 50.0f));
+        } else {
+            const int k = m_handle - 7;
+            float ang = 0.0f;
+            if (ringAngle(vp, m_frameO, m_frameAx, k, ang)) {
+                const glm::vec3 n = m_frameAx[k];
+                t.SetRotation(gp_Ax1(gp_Pnt(m_frameO.x, m_frameO.y, m_frameO.z), gp_Dir(n.x, n.y, n.z)),
+                              static_cast<double>(ang - m_ringStart));
+            }
         }
         m_cage = m_dragStart;
-        m_cage.transformVertices(selectedVerts(), t);
+        m_cage.transformSymmetric(m_dragStart, selectedVerts(), t);
         writeLive(ctx);
     }
 
@@ -368,6 +417,49 @@ void EditFormController::panelBody(const IopContext& ctx, bool& changed) {
         if (ImGui::Button(materializr::tr(k ? "Local" : "World"), ImVec2(half, h))) m_local = (k == 1);
         if (on) ImGui::PopStyleColor();
     }
+    // Symmetry: off, or a mirror plane normal to X / Y / Z through the
+    // form's centre.
+    ImGui::TextUnformatted(materializr::tr("Symmetry"));
+    {
+        static const char* kSym[4] = {"Off", "X", "Y", "Z"};
+        const float q = (ImGui::GetContentRegionAvail().x - 3.0f * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
+        for (int k = 0; k < 4; ++k) {
+            if (k) ImGui::SameLine();
+            const bool on = (m_cage.symAxis == k - 1);
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::Button(materializr::tr(kSym[k]), ImVec2(q, h)) && !on) {
+                m_cage.symAxis = k - 1;
+                if (k > 0) {
+                    double lo = 1e300, hi = -1e300;
+                    for (const gp_Pnt& p : m_cage.verts) {
+                        lo = std::min(lo, p.Coord(k));
+                        hi = std::max(hi, p.Coord(k));
+                    }
+                    m_cage.symPos = (lo <= hi) ? 0.5 * (lo + hi) : 0.0;
+                }
+                changed = true;
+            }
+            if (on) ImGui::PopStyleColor();
+        }
+    }
+    const std::vector<int> partner = m_cage.mirrorPartners();
+    // Selection plus its mirror image (when symmetry is on).
+    auto withMirrorEdges = [&]() {
+        std::set<form::Edge> es(m_selE.begin(), m_selE.end());
+        for (const form::Edge& e : m_selE) {
+            const form::Edge m = m_cage.mirrorEdge(e, partner);
+            if (m.first >= 0) es.insert(m);
+        }
+        return std::vector<form::Edge>(es.begin(), es.end());
+    };
+    auto mirrorFaces = [&](const std::set<int>& fs) {
+        std::set<int> out;
+        for (int f : fs) {
+            const int m = m_cage.mirrorFace(f, partner);
+            if (m >= 0 && !fs.count(m)) out.insert(m);
+        }
+        return out;
+    };
     ImGui::Text(materializr::tr("%d vertices, %d edges, %d faces"),
                 static_cast<int>(m_selV.size()), static_cast<int>(m_selE.size()),
                 static_cast<int>(m_selF.size()));
@@ -377,16 +469,23 @@ void EditFormController::panelBody(const IopContext& ctx, bool& changed) {
     };
     ImGui::BeginDisabled(m_selE.empty());
     if (ImGui::Button(materializr::tr("Crease"), ImVec2(half, h))) {
-        m_cage.setCrease(std::vector<form::Edge>(m_selE.begin(), m_selE.end()), true);
+        m_cage.setCrease(withMirrorEdges(), true);
         edit(true);
     }
     ImGui::SameLine();
     if (ImGui::Button(materializr::tr("Uncrease"), ImVec2(half, h))) {
-        m_cage.setCrease(std::vector<form::Edge>(m_selE.begin(), m_selE.end()), false);
+        m_cage.setCrease(withMirrorEdges(), false);
         edit(true);
     }
     if (ImGui::Button(materializr::tr("Insert Edge"), ImVec2(-1.0f, h))) {
-        m_cage.insertEdgeLoop(*m_selE.begin());
+        const form::Edge e = *m_selE.begin();
+        const form::Edge me = m_cage.mirrorEdge(e, partner);
+        m_cage.insertEdgeLoop(e);
+        // The mirror loop, unless the first one already ran through it.
+        if (me.first >= 0 && me != e) {
+            const auto es = m_cage.edges();
+            if (std::find(es.begin(), es.end(), me) != es.end()) m_cage.insertEdgeLoop(me);
+        }
         clearSelection();
         edit(true);
     }
@@ -394,7 +493,9 @@ void EditFormController::panelBody(const IopContext& ctx, bool& changed) {
     ImGui::BeginDisabled(m_selF.empty());
     if (ImGui::Button(materializr::tr("Subdivide"), ImVec2(half, h))) {
         // Highest index first: subdivideFace keeps lower indices in place.
-        for (auto it = m_selF.rbegin(); it != m_selF.rend(); ++it) m_cage.subdivideFace(*it);
+        std::set<int> fs = m_selF;
+        for (int f : mirrorFaces(m_selF)) fs.insert(f);
+        for (auto it = fs.rbegin(); it != fs.rend(); ++it) m_cage.subdivideFace(*it);
         clearSelection();
         edit(true);
     }
@@ -408,8 +509,13 @@ void EditFormController::panelBody(const IopContext& ctx, bool& changed) {
             len += m_cage.verts[static_cast<size_t>(e.first)].Distance(
                 m_cage.verts[static_cast<size_t>(e.second)]);
         len = es.empty() ? 1.0 : len / static_cast<double>(es.size());
+        // The mirror region extrudes on its own (its normal mirrors ours);
+        // extrudeFaces keeps face indices, so both lists stay valid.
+        const std::set<int> mir = mirrorFaces(m_selF);
         const auto moved = m_cage.extrudeFaces(std::vector<int>(m_selF.begin(), m_selF.end()),
                                                0.3 * len);
+        if (!mir.empty())
+            m_cage.extrudeFaces(std::vector<int>(mir.begin(), mir.end()), 0.3 * len);
         m_selV.clear();
         m_selE.clear();
         m_selF = std::set<int>(moved.begin(), moved.end());
@@ -417,8 +523,10 @@ void EditFormController::panelBody(const IopContext& ctx, bool& changed) {
         edit(true);
     }
     if (ImGui::Button(materializr::tr("Delete faces"), ImVec2(-1.0f, h))) {
-        if (m_selF.size() < m_cage.faces.size()) {
-            m_cage.deleteFaces(std::vector<int>(m_selF.begin(), m_selF.end()));
+        std::set<int> fs = m_selF;
+        for (int f : mirrorFaces(m_selF)) fs.insert(f);
+        if (fs.size() < m_cage.faces.size()) {
+            m_cage.deleteFaces(std::vector<int>(fs.begin(), fs.end()));
             clearSelection();
             edit(true);
         }
@@ -448,6 +556,18 @@ void EditFormController::drawOverlay(const IopOverlay& ov) const {
         const bool cr = m_cage.creases.count(e) != 0;
         ov.line(sp[a], sp[b], sel ? 0xFF1AD8FFu : cr ? 0xFF2C8CFFu : 0xC8C8BEB4u,
                 (sel ? 3.0f : cr ? 2.5f : 1.4f) * s);
+    }
+    // Symmetry: the mirror images of the picked elements, in violet, and
+    // the plane's trace through the cage centre as a dot row is skipped -
+    // the mirrored picks already show where edits land.
+    if (m_cage.symAxis >= 0) {
+        const std::vector<int> partner = m_cage.mirrorPartners();
+        const std::vector<int> picked = selectedVerts();
+        for (int v : picked) {
+            const int p = partner.empty() ? -1 : partner[static_cast<size_t>(v)];
+            if (p < 0 || p == v || !ok[static_cast<size_t>(p)]) continue;
+            ov.disc(sp[static_cast<size_t>(p)], 5.0f * s, 0xFFE65AB4u);
+        }
     }
     for (size_t i = 0; i < m_cage.verts.size(); ++i) {
         if (!ok[i]) continue;
@@ -479,6 +599,21 @@ void EditFormController::drawOverlay(const IopOverlay& ov) const {
                 ov.triangle(q[0], q[1], q[2], pc);
                 ov.triangle(q[0], q[2], q[3], pc);
             }
+        }
+    }
+    // Rotation rings.
+    for (int k = 0; k < 3; ++k) {
+        const glm::vec3 a = ax[(k + 1) % 3], b = ax[(k + 2) % 3];
+        glm::vec2 prev;
+        bool havePrev = false;
+        const bool hot = m_handle == 7 + k;
+        for (int i = 0; i <= kRingSegs; ++i) {
+            const float t = 6.2831853f * i / kRingSegs;
+            glm::vec2 q;
+            const bool ok = ov.toScreen(o + (a * std::cos(t) + b * std::sin(t)) * (kRingR * L), q);
+            if (ok && havePrev) ov.line(prev, q, cols[k], (hot ? 4.0f : 2.0f) * s);
+            prev = q;
+            havePrev = ok;
         }
     }
     ov.disc(so, 9.0f * s, m_handle == 6 ? 0xFFFFFFFFu : 0xE6DCDCDCu);

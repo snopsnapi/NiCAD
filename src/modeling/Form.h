@@ -38,6 +38,23 @@ struct Cage {
     std::vector<gp_Pnt> verts;
     std::vector<std::vector<int>> faces;   // CCW seen from outside
     std::set<Edge> creases;
+    // Symmetry (Fusion's Edit Form symmetry): mirror plane normal to world
+    // axis symAxis (0 X, 1 Y, 2 Z; -1 off) at coordinate symPos. Saved with
+    // the cage.
+    int symAxis = -1;
+    double symPos = 0.0;
+
+    gp_Pnt mirror(const gp_Pnt& p) const;
+    // Each vertex's mirror partner found by position (itself for a vertex on
+    // the plane, -1 for none). Empty when symmetry is off.
+    std::vector<int> mirrorPartners() const;
+    // Move `ids` by `t` from their positions in `start`, keeping symmetry:
+    // each moved vertex's partner (unless also moved) goes to its mirror
+    // image, and a vertex on the plane stays on it.
+    void transformSymmetric(const Cage& start, const std::vector<int>& ids, const gp_Trsf& t);
+    // The mirror image of a face / an edge, or -1 / {-1,-1}.
+    int mirrorFace(int f, const std::vector<int>& partner) const;
+    Edge mirrorEdge(const Edge& e, const std::vector<int>& partner) const;
 
     bool valid() const;
     // Every undirected edge of the faces, once.

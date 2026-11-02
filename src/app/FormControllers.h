@@ -35,10 +35,12 @@ private:
 
 // Edit Form (Fusion's Edit Form): re-opens a FormOp step. Tap vertices,
 // edges or faces of the cage (taps add/remove; a tap on nothing clears);
-// drag the manipulator - arrows move along an axis, squares in a plane, the
-// centre disc scales - in World axes or Local ones (Z along the selection's
-// normal, i.e. at 90 degrees to the surface there). Panel: World/Local,
-// Crease, Uncrease, Subdivide, Insert Edge, Extrude, Delete. The preview is
+// drag the manipulator - arrows move along an axis, squares in a plane, rings
+// rotate about an axis, the centre disc scales - in World axes or Local ones
+// (Z along the selection's normal, i.e. at 90 degrees to the surface there).
+// Symmetry X/Y/Z mirrors every move and edit across a plane through the
+// form's centre. Panel: World/Local, Symmetry, Crease, Uncrease, Subdivide,
+// Insert Edge, Extrude, Delete. The preview is
 // the history replay from the step; Cancel puts the cage back.
 class EditFormController : public InteractiveOpController {
 public:
@@ -83,7 +85,8 @@ private:
 
     // gesture
     bool m_pressed = false, m_moved = false;
-    int m_handle = -1;         // 0..2 axis, 3..5 plane (normal axis), 6 scale
+    int m_handle = -1;         // 0..2 axis, 3..5 plane (normal axis), 6 scale, 7..9 ring
+    float m_ringStart = 0.0f;  // ring angle at press (radians)
     glm::vec2 m_pressAt{0.0f};
     glm::vec3 m_frameO{0.0f}, m_frameAx[3];
     float m_axisTravel = 0.0f;
