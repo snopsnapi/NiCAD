@@ -42,6 +42,7 @@
 #include "app/TrimSurfaceController.h"
 #include "app/SurfaceEditControllers.h"
 #include "app/StudioSplineController.h"
+#include "app/FormControllers.h"
 #include "app/LiveOpPreview.h"
 #include "app/CylindricalPick.h"
 #include "app/KeyBindings.h"
@@ -75,6 +76,7 @@ class Picker;
 class MeshWorker;
 class SketchRegionWorker;
 class Gizmo;
+class FormRenderer;
 class SelectionHighlight;
 class BoxSelect;
 class SectionView;
@@ -1325,6 +1327,17 @@ private:
     int studioSplineStepForBody(int bodyId) const;
     // Open the Studio Spline editor on that step (double tap / timeline).
     bool beginStudioSplineEdit(int step);
+
+    // ── Fork: Form workspace (Application_Form.cpp) ──
+    std::unique_ptr<FormRenderer> m_formRenderer;
+    struct FormMeshCache { size_t hash = 0; std::vector<float> tris; };
+    std::map<int, FormMeshCache> m_formMeshes;
+    size_t m_formSceneSig = 0;
+    void refreshFormMeshes();   // per frame, in the render pass (GL upload)
+    bool pickForm(float x, float y, float vpW, float vpH, int& formId) const;
+    int formStepForId(int formId) const;
+    bool beginEditForm(int step);
+    int selectedFormId() const;
     std::vector<CurvePointRef> curvePoints() const;
     // Nearest point within `radiusPx` of window-local (x, y); false if none.
     bool pickCurvePoint(float x, float y, float vpW, float vpH, float radiusPx,
@@ -1861,17 +1874,19 @@ private:
     OffsetSurfaceController m_offsetSurfaceCtl;
     StudioSplineController m_studioSplineCtl;
     StudioSplineEditController m_studioSplineEditCtl;
+    FormPrimitiveController m_formPrimCtl;
+    EditFormController m_editFormCtl;
     // m_moveFaceCtl is declared up with its delegates; it joined this array
     // once its lifecycle overrides landed, so every generic loop - Esc/Enter
     // chains, single-flight, suppression, input/overlay/gizmo dispatch -
     // covers Move Face without a special case.
-    std::array<InteractiveOpController*, 17> m_iops{
+    std::array<InteractiveOpController*, 19> m_iops{
         &m_shellCtl, &m_taperCtl, &m_scaleFaceCtl, &m_projectSketchCtl,
         &m_defeatureCtl, &m_offsetFaceCtl, &m_resizeCylCtl, &m_moveFaceCtl,
         &m_extrudeCtl,
         &m_ppCtl, &m_edgeCtl, &m_splitCtl, &m_trimSurfaceCtl,
         &m_extendSurfaceCtl, &m_offsetSurfaceCtl, &m_studioSplineCtl,
-        &m_studioSplineEditCtl};
+        &m_studioSplineEditCtl, &m_formPrimCtl, &m_editFormCtl};
     IopContext iopContext();
     bool anyIopActive() const {
         for (auto* c : m_iops) if (c->active()) return true;

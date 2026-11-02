@@ -94,6 +94,7 @@ constexpr unsigned kSelR = 1u << static_cast<unsigned>(SelectionType::SketchRegi
 constexpr unsigned kSelP = 1u << static_cast<unsigned>(SelectionType::Plane);
 constexpr unsigned kSelA = 1u << static_cast<unsigned>(SelectionType::Axis);
 constexpr unsigned kSelC = 1u << static_cast<unsigned>(SelectionType::CurvePoint);
+constexpr unsigned kSelForm = 1u << static_cast<unsigned>(SelectionType::Form);
 
 // One rail command: a ToolAction, or a plugin contribution by name. minCount
 // 0 = no input (fires at once); single = fires on the first matching pick.
@@ -190,6 +191,21 @@ const std::vector<WsGroup>& surfaceWorkspace() {
             kCmdSplit,
         }},
         {nullptr, nullptr, { kCmdDelete, kCmdMeasure }},
+    };
+    return g;
+}
+
+const std::vector<WsGroup>& formWorkspace() {
+    static const std::vector<WsGroup> g = {
+        {nullptr, nullptr, {
+            {MZ_ICON_PRIMITIVE, "Box",      ToolAction::FormBox, nullptr, 0, 0, false},
+            {MZ_ICON_PRIMITIVE, "Plane",    ToolAction::FormPlane, nullptr, 0, 0, false},
+            {MZ_ICON_PRIMITIVE, "Cylinder", ToolAction::FormCylinder, nullptr, 0, 0, false},
+            {MZ_ICON_PRIMITIVE, "Sphere",   ToolAction::FormSphere, nullptr, 0, 0, false},
+            {MZ_ICON_MOVE,      "Edit Form", ToolAction::EditForm, nullptr, kSelForm, 1, true},
+            {MZ_ICON_FINISH,    "Convert",  ToolAction::ConvertForm, nullptr, kSelForm, 1, true},
+            kCmdMeasure,
+        }},
     };
     return g;
 }
@@ -327,9 +343,9 @@ void Application::renderImTouchLayout() {
                     if (e.type == t) ++n;
                 static const char* kNames[] = { "None", "Body", "Face", "Edge",
                                                 "Vertex", "Sketch", "Region",
-                                                "Plane", "Axis", "Point" };
+                                                "Plane", "Axis", "Point", "Form" };
                 const int ti = static_cast<int>(t);
-                if (ti > 0 && ti < 10) {
+                if (ti > 0 && ti < 11) {
                     sel = std::string("  ·  ") + kNames[ti] +
                           " (" + std::to_string(n) + ")";
                 }
@@ -367,9 +383,10 @@ void Application::renderImTouchLayout() {
         // rail offers (see the rail below); a sketch has its own tool set.
         if (!m_inSketchMode) {
             ImGui::SameLine(0.0f, 8.0f * s);
-            static const char* const kWorkspaces[] = { "Solid", "Surface" };
-            const char* items[2] = { materializr::tr(kWorkspaces[0]),
-                                     materializr::tr(kWorkspaces[1]) };
+            static const char* const kWorkspaces[] = { "Solid", "Surface", "Form" };
+            const char* items[3] = { materializr::tr(kWorkspaces[0]),
+                                     materializr::tr(kWorkspaces[1]),
+                                     materializr::tr(kWorkspaces[2]) };
             // segmented() sizes itself to the available width, which an
             // auto-resizing window doesn't have - give it a fixed-width child
             // on the same rowBg plate as the chips beside it.
@@ -387,7 +404,7 @@ void Application::renderImTouchLayout() {
                                   ImGuiWindowFlags_NoScrollbar |
                                       ImGuiWindowFlags_NoScrollWithMouse)) {
                 const int ws0 = m_imTouchWorkspace;
-                m_imTouchWorkspace = touchui::segmented("workspace", items, 2, ws0);
+                m_imTouchWorkspace = touchui::segmented("workspace", items, 3, ws0);
                 if (m_imTouchWorkspace != ws0) saveAppSettings();
             }
             ImGui::EndChild();
@@ -1027,8 +1044,9 @@ void Application::renderImTouchLayout() {
                 // selection-specific tools the catalogue offers on top
                 // (Edit Sketch, Edit Fillet, Diameter, ...) sit in "More".
                 const bool surfaceWs = (m_imTouchWorkspace == 1);
+                const bool formWs = (m_imTouchWorkspace == 2);
                 const std::vector<WsGroup>& groups =
-                    surfaceWs ? surfaceWorkspace() : solidWorkspace();
+                    formWs ? formWorkspace() : surfaceWs ? surfaceWorkspace() : solidWorkspace();
                 int cmdIdx = 0;
                 auto cmdButton = [&](const WsCmd& c, bool inPopup) {
                     ImGui::PushID(cmdIdx++);
@@ -1079,7 +1097,7 @@ void Application::renderImTouchLayout() {
                 // Selection-specific extras from the contextual catalogue:
                 // whatever it offers that the workspace rail doesn't already
                 // have, minus the other workspace's tools.
-                if (m_selection && m_selection->hasSelection() && !m_pendingCmd.active) {
+                if (!formWs && m_selection && m_selection->hasSelection() && !m_pendingCmd.active) {
                     std::vector<const Toolbar::RailTool*> extras;
                     for (const auto& t : tools) {
                         if (wsCovers(groups, t)) continue;
@@ -1473,6 +1491,8 @@ void Application::renderImTouchLayout() {
                 if (!handled && op->isEnabled() && i <= curr &&
                     op->typeId() == "studio_spline")
                     handled = beginStudioSplineEdit(i);
+                if (!handled && op->isEnabled() && i <= curr && op->typeId() == "form")
+                    handled = beginEditForm(i);
                 if (!handled) {
                     m_imTouchHistoryEdit = i;
                     m_imTouchStepBackup = op->serializeParams();

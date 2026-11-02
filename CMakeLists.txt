@@ -245,6 +245,7 @@ add_executable(materializr
     src/app/TrimSurfaceController.cpp
     src/app/SurfaceEditControllers.cpp
     src/app/StudioSplineController.cpp
+    src/app/FormControllers.cpp
     src/app/ExtrudeController.cpp
     src/app/PushPullController.cpp
     src/app/PushPullPreview.cpp
@@ -263,6 +264,7 @@ add_executable(materializr
     src/app/layout/imtouch/ImTouchLayout.cpp
     src/app/Application_Viewport.cpp
     src/app/Application_Curve3D.cpp
+    src/app/Application_Form.cpp
     src/app/Window.cpp
     src/platform_sdl.cpp
     src/plugin/PluginContext.cpp
@@ -411,6 +413,7 @@ add_executable(materializr
     src/viewport/PlaneRenderer.cpp
     src/viewport/RefImageRenderer.cpp
     src/viewport/RefMeshRenderer.cpp
+    src/viewport/FormRenderer.cpp
     src/viewport/MeshTraceRenderer.cpp
     src/viewport/AxisRenderer.cpp
     src/viewport/BackgroundRenderer.cpp

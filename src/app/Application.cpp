@@ -83,6 +83,8 @@ inline void resetFpuForOcct() {
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
 #include "modeling/SweepOp.h"
+#include "modeling/FormOp.h"
+#include "viewport/FormRenderer.h"
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
@@ -1202,6 +1204,9 @@ void Application::initRenderers() {
     if (!m_boxSelect->initialize()) {
         std::fprintf(stderr, "Failed to initialize box select\n");
     }
+    m_formRenderer = std::make_unique<FormRenderer>();
+    if (!m_formRenderer->initialize())
+        std::fprintf(stderr, "Failed to initialize form renderer\n");
     if (!m_gizmo->initialize()) {
         std::fprintf(stderr, "Failed to initialize gizmo\n");
     }
@@ -2759,6 +2764,36 @@ void Application::handleToolAction(int action) {
         case ToolAction::CurvePointCondition:
             applyCurvePointCondition();
             break;
+        case ToolAction::FormBox:
+        case ToolAction::FormPlane:
+        case ToolAction::FormCylinder:
+        case ToolAction::FormSphere: {
+            using K = materializr::FormPrimitiveController::Kind;
+            const K kind = a == ToolAction::FormPlane ? K::Plane
+                         : a == ToolAction::FormCylinder ? K::Cylinder
+                         : a == ToolAction::FormSphere ? K::Sphere : K::Box;
+            cancelAllInteractivePreviews();
+            m_formPrimCtl.beginPrimitive(iopContext(), kind);
+            break;
+        }
+        case ToolAction::EditForm: {
+            const int fid = selectedFormId();
+            const int step = formStepForId(fid);
+            if (step >= 0) beginEditForm(step);
+            break;
+        }
+        case ToolAction::ConvertForm: {
+            const int fid = selectedFormId();
+            if (fid < 0) break;
+            auto trackBodies = trackBodyChanges();
+            auto op = std::make_unique<ConvertFormOp>();
+            op->setForm(fid);
+            if (!m_history->pushOperation(std::move(op), *m_document))
+                showToast(materializr::tr("This form can't be converted - it may fold through itself."));
+            m_selection->clear();
+            markDirty();
+            break;
+        }
         case ToolAction::SketchConstrainMenu:
             // ТЗ-21: the touch rail's Constraints button always opens the menu
             // (switch tool there; tapping the active item leaves the mode).

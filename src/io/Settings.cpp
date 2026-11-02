@@ -107,7 +107,7 @@ void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readBool(kv, "imTouchTree",          s.imTouchTree);
     readBool(kv, "imTouchLiteTimeline",  s.imTouchTimeline);  // legacy key
     readBool(kv, "imTouchTimeline",      s.imTouchTimeline);
-    readIntClamped(kv, "imTouchWorkspace", s.imTouchWorkspace, 0, 1);
+    readIntClamped(kv, "imTouchWorkspace", s.imTouchWorkspace, 0, 2);
     readIntClamped(kv, "touchRightTab",  s.touchRightTab, 0, 1);
     readFloat(kv, "touchRightW",         s.touchRightW);
     readFloat(kv, "touchRailW",          s.touchRailW);
