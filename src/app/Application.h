@@ -104,6 +104,7 @@ class Document;
 class History;
 class SelectionManager;
 enum class SelectionType;   // core/SelectionManager.h (opaque: underlying int)
+struct SelectionEntry;
 class ThreadOp;
 class PushPullOp;
 
@@ -1310,7 +1311,20 @@ private:
     // ── Fork: Studio Spline (3D curve) points (Application_Curve3D.cpp) ──
     // Points of every applied, visible StudioSplineOp; selectable as
     // SelectionType::CurvePoint and moved by the regular Move gizmo.
-    struct CurvePointRef { int step = -1; int bodyId = -1; int index = -1; glm::vec3 p{0.0f}; };
+    // step/bodyId: a Studio Spline point; sketchId/splineId: a point of an
+    // ordinary sketch spline (shown while its sketch is selected).
+    struct CurvePointRef {
+        int step = -1; int bodyId = -1; int index = -1;
+        int sketchId = -1; int splineId = -1;
+        glm::vec3 p{0.0f};
+    };
+    static SelectionEntry curvePointEntry(const CurvePointRef& r);
+    static bool curvePointMatches(const SelectionEntry& e, const CurvePointRef& r);
+    int promoteSketchSpline(int sketchId, int splineId);
+    // The applied StudioSplineOp step that made `bodyId`, or -1.
+    int studioSplineStepForBody(int bodyId) const;
+    // Open the Studio Spline editor on that step (double tap / timeline).
+    bool beginStudioSplineEdit(int step);
     std::vector<CurvePointRef> curvePoints() const;
     // Nearest point within `radiusPx` of window-local (x, y); false if none.
     bool pickCurvePoint(float x, float y, float vpW, float vpH, float radiusPx,
@@ -1846,16 +1860,18 @@ private:
     ExtendSurfaceController m_extendSurfaceCtl;
     OffsetSurfaceController m_offsetSurfaceCtl;
     StudioSplineController m_studioSplineCtl;
+    StudioSplineEditController m_studioSplineEditCtl;
     // m_moveFaceCtl is declared up with its delegates; it joined this array
     // once its lifecycle overrides landed, so every generic loop - Esc/Enter
     // chains, single-flight, suppression, input/overlay/gizmo dispatch -
     // covers Move Face without a special case.
-    std::array<InteractiveOpController*, 16> m_iops{
+    std::array<InteractiveOpController*, 17> m_iops{
         &m_shellCtl, &m_taperCtl, &m_scaleFaceCtl, &m_projectSketchCtl,
         &m_defeatureCtl, &m_offsetFaceCtl, &m_resizeCylCtl, &m_moveFaceCtl,
         &m_extrudeCtl,
         &m_ppCtl, &m_edgeCtl, &m_splitCtl, &m_trimSurfaceCtl,
-        &m_extendSurfaceCtl, &m_offsetSurfaceCtl, &m_studioSplineCtl};
+        &m_extendSurfaceCtl, &m_offsetSurfaceCtl, &m_studioSplineCtl,
+        &m_studioSplineEditCtl};
     IopContext iopContext();
     bool anyIopActive() const {
         for (auto* c : m_iops) if (c->active()) return true;

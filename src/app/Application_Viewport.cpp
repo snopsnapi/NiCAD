@@ -3058,12 +3058,15 @@ void Application::renderViewport() {
                     if (!toImg(r.p, sp)) continue;
                     bool sel = false;
                     for (const auto& e : m_selection->getSelection())
-                        if (e.type == SelectionType::CurvePoint && e.bodyId == r.bodyId &&
-                            e.subShapeIndex == r.index) { sel = true; break; }
-                    const float rad = (sel ? 6.0f : 4.0f) * dp;
+                        if (curvePointMatches(e, r)) { sel = true; break; }
+                    // Ordinary sketch-spline points read smaller and grey: a
+                    // Move on one turns the spline into a Studio Spline.
+                    const bool sketchPt = r.sketchId >= 0;
+                    const float rad = (sel ? 6.0f : (sketchPt ? 3.0f : 4.0f)) * dp;
                     dl->AddCircleFilled(sp, rad + 1.5f * dp, IM_COL32(20, 22, 30, 230));
                     dl->AddCircleFilled(sp, rad, sel ? IM_COL32(255, 216, 26, 255)
-                                                     : IM_COL32(235, 240, 250, 255));
+                                                     : sketchPt ? IM_COL32(170, 180, 200, 255)
+                                                                : IM_COL32(235, 240, 250, 255));
                 }
             }
 
@@ -5838,10 +5841,7 @@ void Application::renderViewport() {
                         CurvePointRef cp;
                         if (pickCurvePoint(localX, localY, contentSize.x, contentSize.y,
                                            24.0f * uiScale(), cp)) {
-                            SelectionEntry entry;
-                            entry.type = SelectionType::CurvePoint;
-                            entry.bodyId = cp.bodyId;
-                            entry.subShapeIndex = cp.index;
+                            const SelectionEntry entry = curvePointEntry(cp);
                             if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else m_selection->select(entry);
                             regionConsumedClick = true;
@@ -6031,6 +6031,21 @@ void Application::renderViewport() {
                     const bool bodyEscalate = touchDbl ||
                         (!materializr::touchMode() &&
                          ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
+                    // Fork: a double tap on a Studio Spline (its curve or a
+                    // point) opens the spline's own operation editor.
+                    if (clickSelectionAllowed && bodyEscalate && !m_pendingCmd.active) {
+                        int splineStep = -1;
+                        for (const auto& e : m_selection->getSelection())
+                            if ((e.type == SelectionType::Edge || e.type == SelectionType::Body ||
+                                 e.type == SelectionType::CurvePoint) && e.bodyId >= 0) {
+                                splineStep = studioSplineStepForBody(e.bodyId);
+                                if (splineStep >= 0) break;
+                            }
+                        if (splineStep < 0 && result.bodyId >= 0)
+                            splineStep = studioSplineStepForBody(result.bodyId);
+                        if (splineStep >= 0 && beginStudioSplineEdit(splineStep))
+                            regionConsumedClick = true;
+                    }
                     if (clickSelectionAllowed && !regionConsumedClick && bodyEscalate &&
                         pendingAllows(SelectionType::Body)) {
                         // Touch: ImGui's 2nd-tap click can arrive a few frames after

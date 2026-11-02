@@ -1506,6 +1506,12 @@ void Sketch::removeConstraint(int id) {
 // The longest OPEN chain in the sketch - see the header note. Each element
 // becomes a run of 2D sample points; chains are walked from degree-1 nodes so
 // closed loops (which buildWires owns) never qualify.
+bool Sketch::setSplineConstruction(int splineId, bool construction) {
+    for (auto& sp : m_splines)
+        if (sp.id == splineId) { sp.isConstruction = construction; return true; }
+    return false;
+}
+
 std::vector<TopoDS_Wire> Sketch::buildCurveWires() const {
     Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
     auto addEdge = [&](const TopoDS_Edge& e) { if (!e.IsNull()) edges->Append(e); };
