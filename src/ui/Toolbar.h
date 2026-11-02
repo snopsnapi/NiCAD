@@ -55,7 +55,8 @@ enum class ToolAction {
     // G2). Activates SketchToolMode::Constrain.
     SketchConstrainMenu,
     // Fork: Surface workspace commands (command-first rail).
-    SurfaceExtrude, Sweep, TrimSurface, ExtendSurface, OffsetSurface, StudioSpline
+    SurfaceExtrude, Sweep, TrimSurface, ExtendSurface, OffsetSurface, StudioSpline,
+    CurvePointCondition
 };
 
 class Toolbar {

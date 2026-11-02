@@ -413,3 +413,49 @@ TEST(StudioSpline, ThroughPointsAndTangent) {
     ASSERT_EQ(re.points().size(), 4u);
     EXPECT_NEAR(re.points()[1].Y(), 9.0, 1e-9);
 }
+
+// Point conditions: G1 at an interior point fixes the tangent there; G2 at
+// the end also sets the curvature vector; both survive a params round trip.
+TEST(StudioSpline, PointConditions) {
+    const std::vector<gp_Pnt> pts = {gp_Pnt(0, 0, 0), gp_Pnt(10, 5, 0),
+                                     gp_Pnt(20, 0, 0), gp_Pnt(30, 5, 0)};
+    std::vector<StudioSplineOp::PointCond> conds(4);
+    conds[1].type = StudioSplineOp::Cond::G1;
+    conds[1].dir = gp_Vec(0, 0, 1) + gp_Vec(1, 0, 0);          // up-and-along
+    conds[3].type = StudioSplineOp::Cond::G2;
+    conds[3].dir = gp_Vec(1, 0, 0);
+    conds[3].curv = gp_Vec(0, 0.1, 0);                          // R = 10, centre +Y
+    const TopoDS_Shape w = StudioSplineOp::buildCurve(pts, false, gp_Vec(), gp_Vec(), conds);
+    ASSERT_FALSE(w.IsNull());
+    double f, l;
+    Handle(Geom_Curve) c = BRep_Tool::Curve(
+        TopoDS::Edge(TopExp_Explorer(w, TopAbs_EDGE).Current()), f, l);
+    ASSERT_FALSE(c.IsNull());
+    // Parameter of the point nearest pts[1].
+    double tBest = f, dBest = 1e9;
+    for (int i = 0; i <= 4000; ++i) {
+        const double t = f + (l - f) * i / 4000.0;
+        const double d = c->Value(t).Distance(pts[1]);
+        if (d < dBest) { dBest = d; tBest = t; }
+    }
+    gp_Pnt p;
+    gp_Vec d1, d2;
+    c->D1(tBest, p, d1);
+    const gp_Vec want = gp_Vec(1, 0, 1).Normalized();
+    EXPECT_GT(d1.Normalized().Dot(want), 0.995);
+    // End curvature: |d1 x d2| / |d1|^3, centre side +Y.
+    c->D2(l, p, d1, d2);
+    const double kappa = d1.Crossed(d2).Magnitude() / std::pow(d1.Magnitude(), 3);
+    EXPECT_NEAR(kappa, 0.1, 1e-3);
+    const gp_Vec normalComp = d2 - d1.Normalized() * d2.Dot(d1.Normalized());
+    EXPECT_GT(normalComp.Y(), 0.0);
+
+    StudioSplineOp op;
+    op.setPoints(pts);
+    op.setCondition(3, conds[3]);
+    StudioSplineOp re;
+    ASSERT_TRUE(re.deserializeParams(op.serializeParams()));
+    EXPECT_EQ(re.condition(3).type, StudioSplineOp::Cond::G2);
+    EXPECT_NEAR(re.condition(3).curv.Y(), 0.1, 1e-9);
+    EXPECT_EQ(re.condition(1).type, StudioSplineOp::Cond::Free);
+}

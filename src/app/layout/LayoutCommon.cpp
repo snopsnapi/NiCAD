@@ -158,7 +158,7 @@ bool Application::touchCanUndo() const {
         return m_history->canUndo() &&
                m_history->currentStep() > m_sketchEntryHistoryStep;
     }
-    return m_history->canUndo();
+    return m_history->canUndo() || paramUndoAvailable();
 }
 
 void Application::touchUndo() {
@@ -178,6 +178,9 @@ void Application::touchUndo() {
         }
         return;
     }
+    // Fork: a parameter edit (curve point move, timeline step edit) is the
+    // newer action while history hasn't moved since it.
+    if (paramUndoAvailable()) { paramUndo(); return; }
     if (m_history->canUndo()) undoWithCascade();
 }
 

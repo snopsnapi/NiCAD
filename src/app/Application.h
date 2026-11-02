@@ -1325,6 +1325,31 @@ private:
     void beginCurveDrag();
     void applyCurveDrag(const gp_Trsf& t);
     void commitCurveDrag();
+    std::vector<std::pair<int, std::string>> m_curveDragBefore;   // step -> params
+
+    // Point conditions (NX Studio Spline): the panel for one selected curve
+    // point; a condition button waits for its face/edge pick
+    // (ToolAction::CurvePointCondition), then applies at that point.
+    // m_curveCondKind: 0 normal to face, 1 tangent to face, 2 tangent to
+    // edge (G1), 3 curvature of edge (G2).
+    int m_curveCondBody = -1, m_curveCondIndex = -1, m_curveCondKind = 0;
+    void renderCurvePointPanel();
+    void applyCurvePointCondition();
+
+    // Undo/redo of parameter edits that replay history in place (curve point
+    // moves and conditions, timeline step edits). They sit outside History's
+    // step list, so the touch Undo/Redo check these first; an entry is live
+    // only while history is exactly where it was when it was recorded.
+    struct ParamEdit {
+        std::vector<std::pair<int, std::string>> before, after;
+        int stepCount = 0, current = 0;
+    };
+    std::vector<ParamEdit> m_paramUndo, m_paramRedo;
+    void recordParamEdit(const std::vector<std::pair<int, std::string>>& before);
+    bool paramUndoAvailable() const;
+    bool paramRedoAvailable() const;
+    void paramUndo();
+    void paramRedo();
     // im-touch timeline: step whose properties popup is open (-1 = none).
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.

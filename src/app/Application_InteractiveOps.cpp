@@ -888,7 +888,19 @@ void Application::beginLoft() {
     // Selected FACES are sections too, in click order alongside sketches.
     std::vector<TopoDS_Shape> faceShapes;
     std::vector<int> faceBodyIds;
+    // Fork: curve-only bodies (Spline 3D) - open sections / rails.
+    std::vector<TopoDS_Wire> curveWires;
     for (const auto& e : m_selection->getSelection()) {
+        if (e.type == SelectionType::Body && e.bodyId >= 0) {
+            try {
+                const TopoDS_Shape& b = m_document->getBody(e.bodyId);
+                if (!b.IsNull() && !TopExp_Explorer(b, TopAbs_FACE).More()) {
+                    TopExp_Explorer wx(b, TopAbs_WIRE);
+                    if (wx.More()) curveWires.push_back(TopoDS::Wire(wx.Current()));
+                }
+            } catch (...) {}
+            continue;
+        }
         if ((e.type == SelectionType::Sketch ||
              e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
             addId(e.sketchId);
@@ -920,7 +932,7 @@ void Application::beginLoft() {
             nSketch, nRegion, nFace, nBody, nEdge, nOther,
             sketchIds.size(), faceShapes.size());
     }
-    if (sketchIds.size() + faceShapes.size() < 2) {
+    if (sketchIds.size() + faceShapes.size() + curveWires.size() < 2) {
         std::fprintf(stderr, "[Loft] beginLoft: fewer than 2 sections, giving up.\n");
         return;
     }
@@ -990,6 +1002,18 @@ void Application::beginLoft() {
         }
         std::fprintf(stderr, "[Loft] sketch %d has no usable geometry.\n", id);
         ++unusable;
+    }
+
+    for (const TopoDS_Wire& w : curveWires) {
+        // A closed 3D curve is a section; an open one a rail (or, with only
+        // open curves, a section of a surface loft - see below).
+        if (BRep_Tool::IsClosed(w)) {
+            LoftSection sec;
+            sec.outer = w;
+            m_loftSections.push_back(std::move(sec));
+        } else {
+            m_loftRails.push_back({-1, w});
+        }
     }
 
     if (m_loftSections.size() == 1 && !m_loftRails.empty() &&

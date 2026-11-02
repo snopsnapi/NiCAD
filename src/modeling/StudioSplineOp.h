@@ -18,6 +18,24 @@
 // with setPoint() and replays history from this step.
 class StudioSplineOp : public Operation {
 public:
+    // Condition at a point (NX Studio Spline): the curve's direction there
+    // (G1) and, for G2, also its curvature vector (kappa * unit normal toward
+    // the centre). Directions are captured from the face/edge when set; the
+    // curve passes them through as fitspline derivative rows. Open curves.
+    enum class Cond { Free = 0, G1 = 1, G2 = 2 };
+    struct PointCond {
+        Cond type = Cond::Free;
+        gp_Vec dir;     // unit tangent
+        gp_Vec curv;    // kappa * normal (G2 only)
+    };
+    void setCondition(size_t i, const PointCond& c) {
+        if (m_conds.size() < m_points.size()) m_conds.resize(m_points.size());
+        if (i < m_conds.size()) m_conds[i] = c;
+    }
+    PointCond condition(size_t i) const {
+        return i < m_conds.size() ? m_conds[i] : PointCond();
+    }
+
     void setPoints(const std::vector<gp_Pnt>& pts) { m_points = pts; }
     const std::vector<gp_Pnt>& points() const { return m_points; }
     void setPoint(size_t i, const gp_Pnt& p) { if (i < m_points.size()) m_points[i] = p; }
@@ -32,7 +50,8 @@ public:
     // creation tool's preview and the tests. Null for < 2 points / failure.
     static TopoDS_Shape buildCurve(const std::vector<gp_Pnt>& pts, bool closed,
                                    const gp_Vec& startTan = gp_Vec(),
-                                   const gp_Vec& endTan = gp_Vec());
+                                   const gp_Vec& endTan = gp_Vec(),
+                                   const std::vector<PointCond>& conds = {});
 
     bool execute(Document& doc) override;
     bool undo(Document& doc) override;
@@ -51,5 +70,6 @@ private:
     bool m_closed = false;
     gp_Vec m_startTan;
     gp_Vec m_endTan;
+    std::vector<PointCond> m_conds;   // parallel to m_points (may be shorter)
     int m_createdBodyId = -1;
 };

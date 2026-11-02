@@ -118,7 +118,7 @@ const WsCmd kCmdMove    {MZ_ICON_MOVE,    "Move",    ToolAction::Move, nullptr,
                          kSelB | kSelF | kSelE | kSelS | kSelR | kSelP | kSelA | kSelC, 1, false};
 const WsCmd kCmdMirror  {MZ_ICON_MIRROR,  "Mirror",  ToolAction::Mirror, nullptr, kSelB, 1, false};
 const WsCmd kCmdSplit   {MZ_ICON_SPLIT,   "Split",   ToolAction::Split, nullptr, kSelB, 1, true};
-const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", kSelS | kSelR | kSelF, 2, false};
+const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", kSelS | kSelR | kSelF | kSelB, 2, false};
 const WsCmd kCmdRemove  {MZ_ICON_REPAIR,  "Remove",  ToolAction::RemoveFace, nullptr, kSelF, 1, false};
 const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::None, "Delete", kSelB, 1, false};
 const WsCmd kCmdMeasure {MZ_ICON_MEASURE, "Measure", ToolAction::Measure, nullptr, 0, 0, false};
@@ -470,8 +470,11 @@ void Application::renderImTouchLayout() {
         ImGui::EndDisabled();
         tip(materializr::tr("Undo (in a sketch: backs out the in-progress shape first)"));
         ImGui::SameLine(0.0f, 8.0f * s);
-        ImGui::BeginDisabled(histLocked || !m_history->canRedo());
-        if (touchui::iconButton("redo", MZ_ICON_REDO, bh)) redoWithCascade();
+        ImGui::BeginDisabled(histLocked || !(m_history->canRedo() || paramRedoAvailable()));
+        if (touchui::iconButton("redo", MZ_ICON_REDO, bh)) {
+            if (paramRedoAvailable()) paramRedo();
+            else redoWithCascade();
+        }
         ImGui::EndDisabled();
         tip(materializr::tr("Redo"));
         if (materializr::touchMode()) {
@@ -1581,9 +1584,11 @@ void Application::renderImTouchLayout() {
                 // replay, then cascade so bodies built from the sketch follow.
                 auto trackBodies = trackBodyChanges();
                 m_history->propagateSketchValueEdits(i, *m_document);
+                const std::string paramsBefore = m_imTouchStepBackup;
                 const bool applied =
                     m_history->editStep(i, *m_document, /*transactional=*/true);
                 if (applied) {
+                    if (!paramsBefore.empty()) recordParamEdit({{i, paramsBefore}});
                     if (auto* se = dynamic_cast<const SketchEditOp*>(op)) {
                         auto tgt = se->getTarget();
                         int sid = tgt ? m_document->findSketchId(tgt.get()) : -1;
