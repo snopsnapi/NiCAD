@@ -128,6 +128,28 @@ bool ExtrudeController::beginExtrude(const IopContext& ctx,
     return begin(ctx);
 }
 
+bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex) {
+    const auto* op = dynamic_cast<const ExtrudeOp*>(ctx.history.getStep(historyIndex));
+    if (!op || op->getProfile().IsNull()) return false;
+    m_profile = op->getProfile();
+    m_mode = op->getMode();
+    m_targetBody = op->getTargetBody();
+    m_sketchId = op->getSketchId();
+    m_origOpDistance = op->getDistance();
+    m_editingIndex = historyIndex;
+    if (!begin(ctx)) {
+        m_editingIndex = -1;
+        return false;
+    }
+    return true;
+}
+
+void ExtrudeController::writeEditDistance(const IopContext& ctx, double d) const {
+    auto* op = dynamic_cast<ExtrudeOp*>(
+        const_cast<Operation*>(ctx.history.getStep(m_editingIndex)));
+    if (op) op->setDistance(d);
+}
+
 int ExtrudeController::onBegin(const IopContext& ctx) {
     m_distance = m_dragRaw = m_dragAppliedDist = 5.0f;
     materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
@@ -159,6 +181,20 @@ int ExtrudeController::onBegin(const IopContext& ctx) {
     // normal points wherever the plane faces, which half the time is away from
     // every body, so aim at the nearest one instead.
     m_sweepSign = 1.0;
+    if (m_editingIndex >= 0) {
+        // Edit: the arrow starts at the op's own distance. A negative one
+        // (a cut runs against the profile normal) flips the arrow so the
+        // well shows a positive value, as when it was created.
+        m_sweepSign = (m_origOpDistance < 0.0) ? -1.0 : 1.0;
+        m_normal *= static_cast<float>(m_sweepSign);
+        m_distance = m_dragRaw = m_dragAppliedDist =
+            static_cast<float>(std::abs(m_origOpDistance));
+        materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+        // Whole document + every op's edit state, BEFORE the first replay.
+        m_editPreview.begin(ctx.doc, ctx.history);
+        ctx.selection.clear();
+        return kNoTargetBody;
+    }
     if (m_mode == ExtrudeMode::Subtract) {
         m_sweepSign = -1.0;
         if (m_targetBody < 0) {
@@ -218,7 +254,51 @@ bool ExtrudeController::syncLiveOp(Operation& op) {
 // leaving the tool volume behind as a stray body), or a target the sweep never
 // reaches (BRepAlgoAPI_Cut hands the body straight back, valid and unchanged).
 // Refusing leaves the op OPEN so the distance can be pushed further or reversed.
+void ExtrudeController::update(const IopContext& ctx) {
+    if (!active()) return;
+    if (m_editingIndex < 0) { InteractiveOpController::update(ctx); return; }
+    if (std::abs(m_distance) < 0.01f) return;   // no zero-length preview mid-drag
+    materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
+    writeEditDistance(ctx, opDistance());
+    setPreviewOk(m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history));
+}
+
+void ExtrudeController::finishEdit(const IopContext& ctx) {
+    m_editPreview.clear();
+    ctx.selection.clear();
+    if (ctx.markMeshesDirty) ctx.markMeshesDirty();
+    teardown();
+}
+
+void ExtrudeController::cancel(const IopContext& ctx) {
+    if (m_editingIndex < 0) { InteractiveOpController::cancel(ctx); return; }
+    if (active()) {
+        materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
+        // The preview mutated the real op: put its distance back and replay
+        // (replay falls back to the pre-edit snapshot if even that fails).
+        writeEditDistance(ctx, m_origOpDistance);
+        m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history);
+    }
+    finishEdit(ctx);
+}
+
 void ExtrudeController::commit(const IopContext& ctx) {
+    if (m_editingIndex >= 0) {
+        if (!active()) { finishEdit(ctx); return; }
+        materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
+        // Zero length would delete the feature - treat it as Cancel.
+        const bool zero = std::abs(m_distance) < 0.01f;
+        writeEditDistance(ctx, zero ? m_origOpDistance : opDistance());
+        if (!m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history) && !zero) {
+            // replay() restored the pre-edit model; the op gets its old value.
+            writeEditDistance(ctx, m_origOpDistance);
+            m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history);
+            if (ctx.toast)
+                ctx.toast(materializr::tr("Couldn't recompute after an upstream change. Edit its parameters, fix the step before it, or delete it."));
+        }
+        finishEdit(ctx);
+        return;
+    }
     materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
     if (active() && m_mode == ExtrudeMode::Subtract) {
         if (m_cutAllBodies) {
@@ -495,7 +575,7 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
     // is here (not a setting) because it is a property of THIS cut: a profile
     // meant to pass through a stack and one meant to pocket a single plate are
     // the same gesture until you say which.
-    if (m_mode == ExtrudeMode::Subtract) {
+    if (m_mode == ExtrudeMode::Subtract && m_editingIndex < 0) {
         ImGui::Spacing();
         // Nothing to re-preview either way: the preview IS the tool volume, and
         // which bodies it cuts is decided at commit. The panel is pinned to
@@ -549,6 +629,9 @@ void ExtrudeController::onCleanup() {
     m_sweepSign = 1.0;
     m_cutAllBodies = false;
     m_sketchId = -1;
+    m_editingIndex = -1;
+    m_origOpDistance = 0.0;
+    m_editPreview.clear();
 }
 
 } // namespace materializr

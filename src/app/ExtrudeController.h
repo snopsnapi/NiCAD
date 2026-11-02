@@ -1,5 +1,6 @@
 #pragma once
 #include "InteractiveOpController.h"
+#include "HistoryEditPreview.h"
 #include "../modeling/ExtrudeOp.h"
 #include <TopoDS_Shape.hxx>
 #include <glm/glm.hpp>
@@ -34,6 +35,13 @@ public:
     // from the swept volume at commit (see resolveCutTarget).
     bool beginExtrude(const IopContext& ctx, const TopoDS_Shape& profile,
                       ExtrudeMode mode, int targetBody, int sourceSketchId);
+    // Fork: re-open the ExtrudeOp at `historyIndex` with the same arrow and
+    // distance well (Fusion's Edit Feature). The preview IS the history
+    // replay from that step (PreviewModel::HistoryEdit, guarded by
+    // HistoryEditPreview); Cancel restores the original distance. False when
+    // the step is not a live ExtrudeOp.
+    bool beginExtrudeEdit(const IopContext& ctx, int historyIndex);
+    bool editing() const { return m_editingIndex >= 0; }
 
     // The arrow's frame - Application still DRAWS the dimension arrow (it
     // shares the extrude/push-pull/edge-op arrow renderer).
@@ -63,10 +71,16 @@ public:
     // validity check) or, with no target, leave the tool volume behind as a
     // stray new body.
     void commit(const IopContext& ctx) override;
+    // Edit mode overrides the whole lifecycle (HistoryEdit); create mode
+    // falls through to the base.
+    void update(const IopContext& ctx) override;
+    void cancel(const IopContext& ctx) override;
 
 protected:
     const char* title() const override { return "Extrude"; }
-    PreviewModel previewModel() const override { return PreviewModel::LiveOp; }
+    PreviewModel previewModel() const override {
+        return m_editingIndex >= 0 ? PreviewModel::HistoryEdit : PreviewModel::LiveOp;
+    }
     int onBegin(const IopContext& ctx) override;
     std::unique_ptr<Operation> buildOp(const IopContext& ctx) override;
     bool syncLiveOp(Operation& op) override;
@@ -122,6 +136,15 @@ private:
     bool m_stickyPressWasDrag = false;
     char m_inputBuf[32] = "5.0";
     bool m_inputFocus = true;
+
+    // Edit mode (beginExtrudeEdit). m_origOpDistance: the op's signed
+    // distance when the edit began, put back on cancel / failed commit.
+    int m_editingIndex = -1;
+    double m_origOpDistance = 0.0;
+    HistoryEditPreview m_editPreview;
+    // Write opDistance() into the edited op (no replay).
+    void writeEditDistance(const IopContext& ctx, double d) const;
+    void finishEdit(const IopContext& ctx);
 };
 
 } // namespace materializr

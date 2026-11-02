@@ -34,6 +34,8 @@ public:
     int getTargetBody() const { return m_targetBodyId; }
     double getDraftAngle() const { return m_draftAngle; }
     int getSketchId() const { return m_sketchId; }
+    // The profile as of the last execute (rebuilt from the sketch on replay).
+    const TopoDS_Shape& getProfile() const { return m_profile; }
 
     // Re-derive m_profile from the current state of the source sketch, then
     // return true so the caller can re-execute() against the new wires.

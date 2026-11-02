@@ -1621,6 +1621,14 @@ private:
         m_edgeCtl.beginEdgeOpEdit(iopContext(), historyIndex, m_edgeOpPickedBodyId);
         m_meshesDirty = true;
     }
+    // Fork: re-open the ExtrudeOp at `historyIndex` with its arrow (timeline
+    // tap). True when the tool opened.
+    bool beginInteractiveExtrudeEdit(int historyIndex) {
+        cancelAllInteractivePreviews();
+        const bool ok = m_extrudeCtl.beginExtrudeEdit(iopContext(), historyIndex);
+        m_meshesDirty = true;
+        return ok;
+    }
     void updateInteractiveEdgeOp() { m_edgeCtl.updateEdgeOp(iopContext()); }
     void commitInteractiveEdgeOp() { m_edgeCtl.commit(iopContext()); }
     void cancelInteractiveEdgeOp() { m_edgeCtl.cancel(iopContext()); }

@@ -1257,6 +1257,9 @@ void Application::renderImTouchLayout() {
                     beginInteractiveEdgeOpEdit(i);
                     handled = m_edgeCtl.active();
                 }
+                if (!handled && op->isEnabled() && i <= curr &&
+                    op->typeId() == "extrude")
+                    handled = beginInteractiveExtrudeEdit(i);
                 if (!handled) {
                     m_imTouchHistoryEdit = i;
                     m_imTouchStepBackup = op->serializeParams();
