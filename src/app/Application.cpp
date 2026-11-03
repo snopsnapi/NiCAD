@@ -2800,7 +2800,7 @@ void Application::handleToolAction(int action) {
             break;
         }
         case ToolAction::DeleteSmart: {
-            if (!m_deleteFacesOnly) {
+            if (m_deleteMode == 0) {
                 // Whole bodies: the Delete plugin, as before.
                 const auto& contribs = PluginRegistry::instance().toolbarContributions();
                 for (size_t i = 0; i < contribs.size(); ++i)
@@ -2810,7 +2810,9 @@ void Application::handleToolAction(int action) {
                     }
                 break;
             }
-            // Faces only: one no-heal Remove step per body.
+            // Faces: one Remove step per body - open (no heal), or healed:
+            // the neighbours extend to close the gap (Defeaturing).
+            const bool heal = (m_deleteMode == 2);
             std::map<int, std::vector<TopoDS_Face>> byBody;
             for (const auto& e : m_selection->getSelection())
                 if (e.type == SelectionType::Face && e.bodyId >= 0 && !e.shape.IsNull())
@@ -2820,12 +2822,14 @@ void Application::handleToolAction(int action) {
             for (auto& [bodyId, faces] : byBody) {
                 auto op = std::make_unique<DefeatureOp>();
                 op->setBody(bodyId);
-                op->setHeal(false);
+                op->setHeal(heal);
                 for (const TopoDS_Face& f : faces) op->addFace(f);
                 if (!m_history->pushOperation(std::move(op), *m_document)) ++failed;
             }
             if (failed)
-                showToast(materializr::tr("Some faces couldn't be deleted - a body can't lose all its faces."));
+                showToast(heal
+                    ? materializr::tr("Couldn't heal: the faces around the gap can't be extended to close it. Try Faces (open) instead.")
+                    : materializr::tr("Some faces couldn't be deleted - a body can't lose all its faces."));
             m_selection->clear();
             markDirty();
             break;

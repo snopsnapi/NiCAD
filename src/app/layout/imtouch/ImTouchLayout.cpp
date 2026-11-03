@@ -1075,7 +1075,7 @@ void Application::renderImTouchLayout() {
                         pc.plugin = c.plugin;
                         pc.typeMask = c.mask;
                         if (c.action == ToolAction::DeleteSmart)
-                            pc.typeMask = m_deleteFacesOnly ? kSelF : kSelB;
+                            pc.typeMask = m_deleteMode == 0 ? kSelB : kSelF;
                         pc.minCount = c.minCount;
                         pc.single = c.single;
                         startWorkspaceCommand(pc);
@@ -1758,12 +1758,22 @@ void Application::renderPendingCommandBar() {
         ImGui::TextColored(touchui::textDim(), materializr::tr("%d selected"), count);
         ImGui::SameLine(0.0f, 16.0f * s);
         ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
-        // Delete: bodies, or faces only.
+        // Delete: Bodies | Faces (left open) | Heal (neighbours extended).
         if (m_pendingCmd.action == static_cast<int>(ToolAction::DeleteSmart)) {
-            bool facesOnly = m_deleteFacesOnly;
-            if (ImGui::Checkbox(materializr::tr("Faces only"), &facesOnly)) {
-                m_deleteFacesOnly = facesOnly;
-                m_pendingCmd.typeMask = facesOnly ? kSelF : kSelB;
+            int mode = m_deleteMode;
+            if (touchui::pillButton("delBodies", MZ_ICON_BODY, materializr::tr("Bodies"), mode == 0))
+                mode = 0;
+            ImGui::SameLine(0.0f, 6.0f * s);
+            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
+            if (touchui::pillButton("delFaces", MZ_ICON_DELETE, materializr::tr("Faces"), mode == 1))
+                mode = 1;
+            ImGui::SameLine(0.0f, 6.0f * s);
+            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
+            if (touchui::pillButton("delHeal", MZ_ICON_REPAIR, materializr::tr("Heal"), mode == 2))
+                mode = 2;
+            if (mode != m_deleteMode) {
+                m_deleteMode = mode;
+                m_pendingCmd.typeMask = mode == 0 ? kSelB : kSelF;
                 // Keep only what the new mode takes.
                 std::vector<SelectionEntry> drop;
                 for (const auto& e : m_selection->getSelection())
