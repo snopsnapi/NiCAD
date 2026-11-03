@@ -2453,6 +2453,9 @@ void Application::handleToolAction(int action) {
                 }
                 if (regionSketch >= 0 && !regionIdxs.empty()) {
                     auto sketch = m_document->getSketch(regionSketch);
+                    m_pendingExtrudePicks.clear();
+                    for (int idx : regionIdxs)
+                        m_pendingExtrudePicks.push_back({regionSketch, idx, TopoDS_Face()});
                     if (sketch) {
                         auto regions = sketch->buildRegions();
                         std::vector<TopoDS_Face> profileFaces;
@@ -2497,6 +2500,7 @@ void Application::handleToolAction(int action) {
             if (!started) {
                 for (const auto& entry : sel) {
                     if (entry.type == SelectionType::Face && !entry.shape.IsNull()) {
+                        m_pendingExtrudePicks = {{-1, -1, TopoDS::Face(entry.shape)}};
                         beginInteractiveExtrude(entry.shape,
                                                 ExtrudeMode::NewBody,
                                                 /*targetBody=*/-1);

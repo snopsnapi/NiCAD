@@ -1870,6 +1870,9 @@ private:
     OffsetFaceController m_offsetFaceCtl;
     ResizeCylindricalController m_resizeCylCtl;
     ExtrudeController m_extrudeCtl;
+    // Fork: the picks the next beginInteractiveExtrude starts its Profiles
+    // field with (consumed there).
+    std::vector<ExtrudeController::Pick> m_pendingExtrudePicks;
     PushPullController m_ppCtl;
     SplitController m_splitCtl;
     TrimSurfaceController m_trimSurfaceCtl;   // fork: Surface workspace scissors

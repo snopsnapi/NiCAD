@@ -337,6 +337,9 @@ void Application::beginInteractiveExtrude(const TopoDS_Shape& profile,
                                           ExtrudeMode mode, int targetBody,
                                           int sourceSketchId) {
     cancelAllInteractivePreviews();
+    // Fork: what the Profiles field starts with (set by the caller).
+    m_extrudeCtl.setInitialPicks(m_pendingExtrudePicks);
+    m_pendingExtrudePicks.clear();
     m_extrudeCtl.beginExtrude(iopContext(), profile, mode, targetBody,
                               sourceSketchId);
 }

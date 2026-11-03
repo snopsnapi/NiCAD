@@ -7,6 +7,8 @@
 #include "../core/Operation.h"
 #include "../modeling/SurfaceExtrudeOp.h"
 #include "../modeling/Sketch.h"
+#include "../modeling/SurfaceOps.h"
+#include "../ui_scale.h"
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
 #include "../core/SelectionManager.h"
@@ -329,6 +331,11 @@ void ExtrudeController::cancel(const IopContext& ctx) {
 }
 
 void ExtrudeController::commit(const IopContext& ctx) {
+    if (m_editingIndex < 0 && m_picking && m_picks.empty() && active()) {
+        // The Profiles field was cleared and nothing re-picked yet.
+        if (ctx.toast) ctx.toast(materializr::tr("Pick a profile to extrude."));
+        return;
+    }
     if (m_editingIndex >= 0) {
         if (!active()) { finishEdit(ctx); return; }
         materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
@@ -481,6 +488,25 @@ void ExtrudeController::onViewportInput(const IopViewport& vp,
                                         const IopContext& ctx) {
     if (!active()) return;
 
+    // Profiles field armed: a tap (press + lift without moving, not on the
+    // arrow) toggles the region / face under the finger. Drags still orbit
+    // or pull the arrow as usual.
+    if (m_picking) {
+        if (vp.clicked) { m_tapArmed = true; m_tapAt = vp.mouse; }
+        if (m_tapArmed && glm::length(vp.mouse - m_tapAt) > 12.0f * uiScale())
+            m_tapArmed = false;
+        if (m_tapArmed && vp.released) {
+            m_tapArmed = false;
+            if (!draggingHandle() && !vp.uiCaptured) {
+                Pick p;
+                if (pickAt(vp, ctx, p)) {
+                    togglePick(ctx, p);
+                    return;   // the controller may have restarted
+                }
+            }
+        }
+    }
+
     if (vp.clicked) {
         if (materializr::touchMode()) {
             // Hit-test the visible arrow (same geometry the viewport draws).
@@ -518,6 +544,124 @@ void ExtrudeController::onViewportInput(const IopViewport& vp,
         m_dragAppliedDist = m_distance;
         materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
     }
+}
+
+// ── Profiles field ──────────────────────────────────────────────────────────
+
+int ExtrudeController::profileCount() const {
+    if (m_picking || !m_picks.empty()) return static_cast<int>(m_picks.size());
+    int n = 0;
+    for (TopExp_Explorer ex(m_profile, TopAbs_FACE); ex.More(); ex.Next()) ++n;
+    return n;
+}
+
+bool ExtrudeController::pickAt(const IopViewport& vp, const IopContext& ctx, Pick& out) const {
+    const glm::vec3 d = glm::normalize(vp.rayDir);
+    const gp_Pnt o(vp.rayOrigin.x, vp.rayOrigin.y, vp.rayOrigin.z);
+    const gp_Dir dir(d.x, d.y, d.z);
+    double best = 1e300;
+    bool found = false;
+    // Sketch regions of visible sketches (cached builds only - a tap never
+    // starts a region build).
+    for (int sid : ctx.doc.getAllSketchIds()) {
+        if (!ctx.doc.isSketchVisible(sid)) continue;
+        auto sk = ctx.doc.getSketch(sid);
+        if (!sk || !sk->regionsCached()) continue;
+        const auto regions = sk->buildRegions();
+        for (size_t i = 0; i < regions.size(); ++i) {
+            gp_Pnt hit;
+            if (regions[i].face.IsNull() || !surf::pickPoint(regions[i].face, o, dir, hit)) continue;
+            // Regions win a tie with the body face they lie on.
+            const double t = o.Distance(hit) - 1e-3;
+            if (t < best) {
+                best = t;
+                out = Pick{sid, static_cast<int>(i), TopoDS_Face()};
+                found = true;
+            }
+        }
+    }
+    // Planar faces of visible bodies, never the preview's own tool volume.
+    const int preview = previewBodyId();
+    for (int id : ctx.doc.getAllBodyIds()) {
+        if (id == preview || !ctx.doc.isBodyVisible(id) || ctx.doc.isBodyMesh(id)) continue;
+        TopoDS_Shape body;
+        try { body = ctx.doc.getBody(id); } catch (...) { continue; }
+        gp_Pnt hit;
+        if (!surf::pickPoint(body, o, dir, hit)) continue;
+        const double t = o.Distance(hit);
+        if (t >= best) continue;
+        const TopoDS_Face f = surf::nearestFace(body, hit);
+        if (f.IsNull()) continue;
+        Handle(Geom_Surface) gs = BRep_Tool::Surface(f);
+        if (gs.IsNull() || !gs->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
+        best = t;
+        out = Pick{-1, -1, f};
+        found = true;
+    }
+    return found;
+}
+
+void ExtrudeController::togglePick(const IopContext& ctx, const Pick& p) {
+    bool removed = false;
+    for (auto it = m_picks.begin(); it != m_picks.end(); ++it) {
+        const bool same = p.face.IsNull()
+            ? (it->face.IsNull() && it->sketchId == p.sketchId && it->region == p.region)
+            : (!it->face.IsNull() && it->face.IsSame(p.face));
+        if (same) { m_picks.erase(it); removed = true; break; }
+    }
+    if (!removed) {
+        // Regions extrude together only from one sketch (one plane): a region
+        // of another sketch starts a fresh set.
+        if (p.sketchId >= 0)
+            for (const Pick& q : m_picks)
+                if (q.sketchId >= 0 && q.sketchId != p.sketchId) { m_picks.clear(); break; }
+        m_picks.push_back(p);
+    }
+    if (!m_picks.empty()) restartFromPicks(ctx);
+}
+
+bool ExtrudeController::restartFromPicks(const IopContext& ctx) {
+    std::vector<TopoDS_Face> faces;
+    int sketchId = -1;
+    for (const Pick& p : m_picks) {
+        if (!p.face.IsNull()) { faces.push_back(p.face); continue; }
+        auto sk = ctx.doc.getSketch(p.sketchId);
+        if (!sk) continue;
+        const auto regions = sk->buildRegions();
+        if (p.region < 0 || p.region >= static_cast<int>(regions.size())) continue;
+        if (!regions[static_cast<size_t>(p.region)].face.IsNull()) {
+            faces.push_back(regions[static_cast<size_t>(p.region)].face);
+            sketchId = p.sketchId;
+        }
+    }
+    if (faces.empty()) return false;
+    TopoDS_Shape profile;
+    if (faces.size() == 1) {
+        profile = faces.front();
+    } else {
+        BRep_Builder b;
+        TopoDS_Compound comp;
+        b.MakeCompound(comp);
+        for (const TopoDS_Face& f : faces) b.Add(comp, f);
+        profile = comp;
+    }
+    // Keep everything the user set: distance, mode, target, the picks.
+    const float dist = m_distance;
+    const ExtrudeMode mode = m_mode;
+    const int target = m_targetBody;
+    const bool cutAll = m_cutAllBodies;
+    const bool picking = m_picking;
+    m_restarting = true;
+    InteractiveOpController::cancel(ctx);   // drop the old preview
+    const bool ok = beginExtrude(ctx, profile, mode, target, sketchId);
+    m_restarting = false;
+    if (!ok) return false;
+    m_picking = picking;
+    m_cutAllBodies = cutAll;
+    m_distance = m_dragRaw = m_dragAppliedDist = dist;
+    materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+    updateExtrude(ctx, /*applySnap=*/false);
+    return true;
 }
 
 void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
@@ -572,6 +716,27 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
     }
 
     bool doCommit = false, doCancel = false;
+    // Profiles selection field (Fusion's "Profiles: 1 selected  x").
+    if (!m_surface && m_editingIndex < 0) {
+        const float fh = 40.0f * s;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(materializr::tr("Profiles"));
+        ImGui::SameLine();
+        char lbl[48];
+        std::snprintf(lbl, sizeof(lbl), materializr::tr("%d selected"), profileCount());
+        if (m_picking) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        const float clearW = fh;
+        const float fieldW = std::max(80.0f * s, ImGui::GetContentRegionAvail().x - clearW -
+                                                     ImGui::GetStyle().ItemSpacing.x);
+        if (ImGui::Button(lbl, ImVec2(fieldW, fh))) m_picking = !m_picking;
+        if (m_picking) ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (ImGui::Button("x##clearProfiles", ImVec2(clearW, fh))) {
+            m_picks.clear();
+            m_picking = true;
+        }
+        ImGui::Spacing();
+    }
     if (imTouch) {
         // im-touch: the WHOLE panel is this one tappable value well - no
         // header, hint or steppers (Steve: the full "distance dialog" kept
@@ -679,6 +844,11 @@ void ExtrudeController::onCleanup() {
     m_origOpDistance = 0.0;
     m_editPreview.clear();
     m_surface = false;
+    if (!m_restarting) {
+        m_picks.clear();
+        m_picking = false;
+    }
+    m_tapArmed = false;
 }
 
 } // namespace materializr

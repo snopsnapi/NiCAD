@@ -46,6 +46,15 @@ public:
     bool beginSurfaceExtrude(const IopContext& ctx, int sketchId);
     bool editing() const { return m_editingIndex >= 0; }
 
+    // Fork: Fusion-style "Profiles" selection field. The panel shows how many
+    // profiles feed the extrude; tapping the field arms picking, and each tap
+    // in the viewport (not on the arrow) adds or removes a sketch region or a
+    // planar body face, rebuilding the profile and the preview. setPicks is
+    // what the starting selection was (Application, before beginExtrude).
+    struct Pick { int sketchId = -1; int region = -1; TopoDS_Face face; };
+    void setInitialPicks(const std::vector<Pick>& picks) { m_picks = picks; }
+    bool picking() const { return m_picking; }
+
     // The arrow's frame - Application still DRAWS the dimension arrow (it
     // shares the extrude/push-pull/edge-op arrow renderer).
     const glm::vec3& origin() const { return m_origin; }
@@ -145,6 +154,20 @@ private:
     int m_editingIndex = -1;
     double m_origOpDistance = 0.0;
     bool m_surface = false;   // building a SurfaceExtrudeOp
+
+    std::vector<Pick> m_picks;
+    bool m_picking = false;
+    bool m_restarting = false;   // onCleanup keeps the picks across a restart
+    int profileCount() const;
+    // Tap at the viewport ray: the nearest sketch region or planar body face
+    // (not the preview body). False on a miss.
+    bool pickAt(const IopViewport& vp, const IopContext& ctx, Pick& out) const;
+    void togglePick(const IopContext& ctx, const Pick& p);
+    // Rebuild the profile from m_picks and restart the preview with the
+    // current distance. False when nothing usable is picked.
+    bool restartFromPicks(const IopContext& ctx);
+    glm::vec2 m_tapAt{0.0f};
+    bool m_tapArmed = false;
     HistoryEditPreview m_editPreview;
     // Write opDistance() into the edited op (no replay).
     void writeEditDistance(const IopContext& ctx, double d) const;
