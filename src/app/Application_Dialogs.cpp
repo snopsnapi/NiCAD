@@ -1041,7 +1041,7 @@ void Application::renderRotatePanel() {
     ImGui::SameLine();
     if (ImGui::Button(materializr::tr("Close"), materializr::uiSz(70, 0))) {
         endSession();
-        m_gizmo->setMode(GizmoMode::Translate);
+        m_gizmo->setCombinedMove();   // fork: back to the Fusion-style default
     }
     ImGui::End();
 }

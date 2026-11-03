@@ -71,7 +71,9 @@ public:
 
 private:
     GizmoMode m_mode = GizmoMode::Translate;
-    bool m_combined = false;
+    // Fork: the Fusion-style combined gizmo is the default (a body picked by
+    // double tap gets arrows, rotation arcs and plane squares too).
+    bool m_combined = true;
     glm::vec3 m_position{0};
     bool m_visible = false;
 
