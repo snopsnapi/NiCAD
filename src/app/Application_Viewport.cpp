@@ -919,6 +919,22 @@ void Application::renderViewport() {
                 gizmoShown = true;
             } catch (...) {}
         }
+        // Fork: Move > Faces - the same combined gizmo on the picked face.
+        {
+            int fb = -1;
+            TopoDS_Face ff;
+            if (!gizmoShown && m_moveFacesMode && !anyInteractiveOpActive &&
+                !m_selection->navigationOnly() &&
+                (m_faceDrag.active || faceMoveTarget(fb, ff))) {
+                if (!m_gizmo->isCombined()) m_gizmo->setCombinedMove();
+                glm::vec3 c = faceMoveGizmoCentre();
+                if (m_gizmoDragging)
+                    c = glm::vec3(m_gizmoPreviewXf * glm::vec4(c, 1.0f));
+                m_gizmo->setPosition(c);
+                m_gizmo->setVisible(true);
+                gizmoShown = true;
+            }
+        }
         // Fork: selected Studio Spline points get the Move gizmo at their
         // centre (no body selected). Scale has no meaning for points.
         if (!gizmoShown && hasSelectedCurvePoints() &&
@@ -5030,11 +5046,16 @@ void Application::renderViewport() {
                             }
                         }
                         beginCurveDrag();   // fork: Studio Spline points
+                        // Fork: Move > Faces - the face, not its body.
+                        if (m_moveFacesMode) {
+                            beginFaceDrag();
+                            if (m_faceDrag.active) m_gizmoDragOriginals.clear();
+                        }
                         if (!m_gizmoDragOriginals.empty() ||
                             !m_sketchGizmoDragSketches.empty() ||
                             !m_planeGizmoDrag.empty() ||
                             !m_axisGizmoDrag.empty() ||
-                            !m_curveDrag.empty()) {
+                            !m_curveDrag.empty() || m_faceDrag.active) {
                             if (!m_gizmoDragOriginals.empty()) {
                                 m_gizmoDragBodyId = m_gizmoDragOriginals.front().first;
                                 m_gizmoDragOriginalShape = m_gizmoDragOriginals.front().second;
@@ -5132,6 +5153,10 @@ void Application::renderViewport() {
                             }
                             for (const auto& c : m_curveDrag) {
                                 m_gizmoSharedPivot += glm::vec3(c.orig.X(), c.orig.Y(), c.orig.Z());
+                                ++np;
+                            }
+                            if (m_faceDrag.active) {
+                                m_gizmoSharedPivot += m_faceDrag.centre;
                                 ++np;
                             }
                             if (np > 0) m_gizmoSharedPivot /= static_cast<float>(np);
@@ -5255,6 +5280,7 @@ void Application::renderViewport() {
                                     m_document->setAxis(a.id, newO, a.direction);
                                 }
                                 applyCurveDrag(trsf);   // fork: curve points
+                                applyFaceDrag(trsf);    // fork: Move > Faces
                             } else if (gResult.mode == GizmoMode::Rotate) {
                                 glm::vec3 ad = axisDirOf(gResult.activeAxis);
                                 m_gizmoRotAxis = ad;
@@ -5289,6 +5315,7 @@ void Application::renderViewport() {
                                     m_document->setPlane(pid, pln);
                                 }
                                 applyCurveDrag(trsf);   // fork: curve points
+                                applyFaceDrag(trsf);    // fork: Move > Faces
                             } else { // Scale - per-axis, non-uniform about the centre
                                 float os = static_cast<float>(glm::length(
                                     glm::vec3(ox2-ox1, oy2-oy1, oz2-oz1)));
@@ -5350,6 +5377,22 @@ void Application::renderViewport() {
                             }
                             applyCurveDrag(ct);
                             commitCurveDrag();
+                        }
+                        // Fork: Move > Faces - the same final pose as one step.
+                        if (m_faceDrag.active) {
+                            gp_Trsf ft;
+                            const glm::vec3& pv = m_gizmoSharedPivot;
+                            if (m_gizmo->getMode() == GizmoMode::Rotate) {
+                                const glm::vec3 ax = m_gizmoRotAxis;
+                                if (glm::length(ax) > 1e-6f)
+                                    ft.SetRotation(gp_Ax1(gp_Pnt(pv.x, pv.y, pv.z),
+                                                          gp_Dir(ax.x, ax.y, ax.z)),
+                                                   m_gizmoTotalAngle * M_PI / 180.0);
+                            } else {
+                                const glm::vec3 d = m_gizmoTotalDelta;
+                                ft.SetTranslation(gp_Vec(d.x, d.y, d.z));
+                            }
+                            commitFaceDrag(ft);
                         }
                         try {
                             GizmoMode gm = m_gizmo->getMode();

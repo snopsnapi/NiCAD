@@ -1373,6 +1373,29 @@ private:
     void commitCurveDrag();
     std::vector<std::pair<int, std::string>> m_curveDragBefore;   // step -> params
 
+    // Fork: Move > Faces (Fusion Move/Copy "Faces"). The combined gizmo on a
+    // picked planar face; the drag re-runs FaceTweak on the original body,
+    // release records a FaceTweakOp. Application_FaceMove.cpp.
+    bool m_moveFacesMode = false;
+    struct FaceDrag {
+        bool active = false;
+        int bodyId = -1;
+        TopoDS_Shape orig;
+        TopoDS_Face face;
+        glm::vec3 centre{0.0f};
+        bool haveGood = false;
+        std::string refusal;
+    };
+    FaceDrag m_faceDrag;
+    mutable const void* m_faceCentreKey = nullptr;
+    mutable glm::vec3 m_faceCentreCache{0.0f};
+    bool faceMoveTarget(int& bodyId, TopoDS_Face& face) const;
+    glm::vec3 faceMoveGizmoCentre() const;
+    void beginFaceDrag();
+    void applyFaceDrag(const gp_Trsf& t);
+    void commitFaceDrag(const gp_Trsf& t);
+    void cancelFaceDrag();
+
     // Point conditions (NX Studio Spline): the panel for one selected curve
     // point; a condition button waits for its face/edge pick
     // (ToolAction::CurvePointCondition), then applies at that point.

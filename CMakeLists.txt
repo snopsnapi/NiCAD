@@ -264,6 +264,7 @@ add_executable(materializr
     src/app/layout/imtouch/ImTouchLayout.cpp
     src/app/Application_Viewport.cpp
     src/app/Application_Curve3D.cpp
+    src/app/Application_FaceMove.cpp
     src/app/Application_Form.cpp
     src/app/Window.cpp
     src/platform_sdl.cpp

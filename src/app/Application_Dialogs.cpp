@@ -1060,6 +1060,7 @@ void Application::renderMovePanel() {
         }
         m_moveSteps.clear();
         m_movePending = false;
+        m_moveFacesMode = false;
     };
     const bool isPlane = m_selection && m_selection->primaryType() == SelectionType::Plane;
     // Fork: the combined (Fusion-style) Move gizmo keeps this panel whichever
@@ -1068,7 +1069,7 @@ void Application::renderMovePanel() {
     if (m_inSketchMode || !m_gizmo ||
         (m_gizmo->getMode() != GizmoMode::Translate && !combined) ||
         m_selection->navigationOnly() ||
-        !(m_selection->hasSelectedBodies() || isPlane)) {
+        !(m_selection->hasSelectedBodies() || isPlane || m_moveFacesMode)) {
         endSession();
         return;
     }
@@ -1098,6 +1099,46 @@ void Application::renderMovePanel() {
 
     ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Move"));
     ImGui::Separator();
+    // Fork: Fusion's Move Object - Bodies or Faces (sketch objects later).
+    if (!isPlane) {
+        const char* objs[] = { materializr::tr("Bodies"), materializr::tr("Faces") };
+        const int cur = m_moveFacesMode ? 1 : 0;
+        const int next = touchui::segmented("moveObj", objs, 2, cur);
+        if (next != cur && !m_gizmoDragging) {
+            if (next == 1) {
+                // Faces: keep the faces of the selection, pick one if none.
+                std::vector<SelectionEntry> keep;
+                for (const auto& e : m_selection->getSelection())
+                    if (e.type == SelectionType::Face) keep.push_back(e);
+                m_selection->clear();
+                for (const auto& e : keep) m_selection->addToSelection(e);
+                m_moveFacesMode = true;
+            } else {
+                // Bodies: the faces' bodies.
+                std::vector<int> bodies;
+                for (const auto& e : m_selection->getSelection())
+                    if (e.bodyId >= 0 &&
+                        std::find(bodies.begin(), bodies.end(), e.bodyId) == bodies.end())
+                        bodies.push_back(e.bodyId);
+                m_selection->clear();
+                for (int b : bodies) {
+                    SelectionEntry e;
+                    e.type = SelectionType::Body;
+                    e.bodyId = b;
+                    try { e.shape = m_document->getBody(b); } catch (...) {}
+                    m_selection->addToSelection(e);
+                }
+                m_moveFacesMode = false;
+            }
+            m_gizmo->setCombinedMove();
+        }
+        if (m_moveFacesMode) {
+            int fb = -1;
+            TopoDS_Face ff;
+            if (!faceMoveTarget(fb, ff))
+                ImGui::TextDisabled("%s", materializr::tr("Tap a flat face to move"));
+        }
+    }
 
     // User axes (Z up): user X = world X, user Y = world Z, user Z = world Y.
     const char* axisLabels[3] = {"X", "Y", "Z"};

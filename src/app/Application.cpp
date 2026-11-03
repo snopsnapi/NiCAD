@@ -2998,8 +2998,13 @@ void Application::handleToolAction(int action) {
             bool moveFaceSel = false;
             for (const auto& e : m_selection->getSelection())
                 if (e.type == SelectionType::Face && !e.shape.IsNull()) { moveFaceSel = true; break; }
-            if (moveFaceSel) {
-                beginMoveFace();
+            // Fork: Fusion Move > Faces - the combined gizmo on the face (the
+            // face moves, its neighbours are rebuilt), not the old Move Face
+            // shear panel.
+            m_moveFacesMode = moveFaceSel && !m_selection->hasSelectedBodies();
+            if (m_moveFacesMode) {
+                m_gizmo->setCombinedMove();
+                m_selection->setNavigationOnly(false);
                 break;
             }
             // Edges that form one hole's rim: the selection picks the verb
@@ -3742,6 +3747,7 @@ void Application::handleShortcuts() {
                 for (auto& a : m_axisGizmoDrag)
                     m_document->setAxis(a.id, a.origin, a.direction);
             } catch (...) {}
+            cancelFaceDrag();   // fork: Move > Faces preview back to the original
             m_gizmo->cancelDrag();
             m_gizmoDragging = false;
             m_gizmoDragOriginalShape.Nullify();
