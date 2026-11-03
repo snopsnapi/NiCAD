@@ -1349,9 +1349,9 @@ private:
     // (SelectionType::OriginPlane). Shown when m_showOrigin, and always
     // while a command waits for a plane (Sketch). Toggle on the right edge.
     bool m_showOrigin = true;
-    // Fork: Delete's mode - 0 whole bodies, 1 faces (body left open),
-    // 2 heal (faces removed, neighbours extended to close the gap).
-    int m_deleteMode = 0;
+    // Fork: Delete (Fusion): picked faces are removed and, with Heal on, the
+    // neighbours extend to close the gap; picked bodies are deleted whole.
+    bool m_deleteHeal = true;
     bool originVisible() const;
     float originHalfSize() const;   // world size giving a steady screen size
     // Nearest origin plane under window-local (x, y): which = 0 XY, 1 XZ,

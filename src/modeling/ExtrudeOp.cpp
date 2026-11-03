@@ -339,6 +339,17 @@ bool timedBooleanBuild(OP& op, const TopoDS_Shape& a, const TopoDS_Shape& b,
 } // namespace
 
 bool ExtrudeOp::execute(Document& doc) {
+    if (m_pendingMode >= 0) {   // fork: Edit Feature's mode switch
+        const ExtrudeMode nm = static_cast<ExtrudeMode>(m_pendingMode);
+        if (m_mode == ExtrudeMode::NewBody && nm != ExtrudeMode::NewBody &&
+            m_createdBodyId >= 0)
+            m_savedCreatedId = m_createdBodyId;
+        if (nm == ExtrudeMode::NewBody && m_createdBodyId < 0)
+            m_createdBodyId = m_savedCreatedId;
+        m_mode = nm;
+        m_targetBodyId = (nm == ExtrudeMode::NewBody) ? -1 : m_pendingTarget;
+        m_pendingMode = -1;
+    }
     if (m_profile.IsNull()) {
         return false;
     }

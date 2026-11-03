@@ -24,6 +24,7 @@
 #include <imgui.h>
 #include <BRep_Tool.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepGProp_Face.hxx>
@@ -183,6 +184,9 @@ bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex
     m_origProfile = op->getProfile();
     m_origSketchId = op->getSketchId();
     m_profileEdited = false;
+    m_origMode = op->getMode();
+    m_origTarget = op->getTargetBody();
+    m_modeEdited = false;
     m_editingIndex = historyIndex;
     m_surface = dynamic_cast<const SurfaceExtrudeOp*>(op) != nullptr;
     if (!begin(ctx)) {
@@ -368,6 +372,10 @@ void ExtrudeController::cancel(const IopContext& ctx) {
         // The preview mutated the real op: put its distance back and replay
         // (replay falls back to the pre-edit snapshot if even that fails).
         writeEditDistance(ctx, m_origOpDistance);
+        if (m_modeEdited)
+            if (auto* op = dynamic_cast<ExtrudeOp*>(
+                    const_cast<Operation*>(ctx.history.getStep(m_editingIndex))))
+                op->requestModeChange(m_origMode, m_origTarget);
         if (m_profileEdited)
             if (auto* op = dynamic_cast<ExtrudeOp*>(
                     const_cast<Operation*>(ctx.history.getStep(m_editingIndex))))
@@ -437,16 +445,17 @@ void ExtrudeController::commit(const IopContext& ctx) {
     InteractiveOpController::commit(ctx);
 }
 
-int ExtrudeController::findJoinHost(const IopContext& ctx) const {
+int ExtrudeController::findJoinHost(const IopContext& ctx, int excludeBody) const {
     for (const Pick& p : m_picks)
-        if (p.bodyId >= 0 && ctx.doc.isBodyVisible(p.bodyId)) return p.bodyId;
+        if (p.bodyId >= 0 && p.bodyId != excludeBody && ctx.doc.isBodyVisible(p.bodyId))
+            return p.bodyId;
     if (!ctx.findBodyUnderRegion || m_profile.IsNull()) return -1;
     for (TopExp_Explorer ex(m_profile, TopAbs_FACE); ex.More(); ex.Next()) {
         const TopoDS_Face f = TopoDS::Face(ex.Current());
         Handle(Geom_Plane) pl = Handle(Geom_Plane)::DownCast(BRep_Tool::Surface(f));
         if (pl.IsNull()) continue;
         const int b = ctx.findBodyUnderRegion(f, pl->Pln());
-        if (b >= 0) return b;
+        if (b >= 0 && b != excludeBody) return b;
     }
     return -1;
 }
@@ -481,7 +490,52 @@ void ExtrudeController::autoPickMode(const IopContext& ctx) {
     }
 }
 
+void ExtrudeController::setModeEdit(const IopContext& ctx, ExtrudeMode mode) {
+    auto* op = dynamic_cast<ExtrudeOp*>(const_cast<Operation*>(ctx.history.getStep(m_editingIndex)));
+    if (!op) return;
+    int target = -1;
+    if (mode != ExtrudeMode::NewBody) {
+        // The body to join / cut: the one it already works on, else the one
+        // the profile sits on, else the one the sweep runs into. Never the
+        // step's own New Body result.
+        const int own = op->createdBodyId();
+        target = op->getTargetBody();
+        if (target < 0) target = findJoinHost(ctx, own);
+        if (target < 0 || mode == ExtrudeMode::Subtract) {
+            const gp_Vec v(m_normal.x * m_distance, m_normal.y * m_distance,
+                           m_normal.z * m_distance);
+            TopoDS_Shape tool;
+            try {
+                BRepPrimAPI_MakePrism mk(m_profile, v);
+                if (mk.IsDone()) tool = mk.Shape();
+            } catch (...) {}
+            const int hit = tool.IsNull() ? -1
+                : cutpick::pickCutTarget(cutCandidates(ctx, own), tool, target);
+            if (hit >= 0) target = hit;
+            else if (mode == ExtrudeMode::Subtract) target = -1;
+        }
+        if (target < 0) {
+            if (ctx.toast)
+                ctx.toast(mode == ExtrudeMode::Subtract
+                    ? materializr::tr("Cut: this extrude doesn't reach any body.")
+                    : materializr::tr("Join: this extrude touches no body."));
+            return;
+        }
+    }
+    materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
+    op->requestModeChange(mode, target);
+    if (!m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history)) {
+        // The replay put the model and the step's mode back.
+        if (ctx.toast)
+            ctx.toast(materializr::tr("Couldn't switch the operation - the result is invalid or later steps depend on it."));
+    }
+    m_mode = op->getMode();
+    m_targetBody = op->getTargetBody();
+    m_modeEdited = true;
+}
+
 void ExtrudeController::setModeManual(const IopContext& ctx, ExtrudeMode mode) {
+    if (m_editingIndex >= 0) { setModeEdit(ctx, mode); return; }
     m_modeAuto = false;
     m_mode = mode;
     // Cut: the host is only a preference, the target is resolved at commit.
@@ -965,7 +1019,7 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
         ImGui::Spacing();
     }
     // Operation (Fusion): Join / Cut / New Body. No Intersect, by request.
-    if (!m_surface && m_editingIndex < 0) {
+    if (!m_surface) {
         const char* items[] = { materializr::tr("Join"), materializr::tr("Cut"),
                                 materializr::tr("New Body") };
         const int cur = m_mode == ExtrudeMode::Union ? 0

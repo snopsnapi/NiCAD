@@ -132,7 +132,9 @@ private:
     int  m_autoSign = 0;        // sign of the distance the auto mode was picked for
     int  m_joinHost = -1;       // body the profile lies flat on, or -1
     bool m_enteredAsCut = false; // started from the Subtract tool (arrow aims in)
-    int  findJoinHost(const IopContext& ctx) const;
+    int  findJoinHost(const IopContext& ctx, int excludeBody = -1) const;
+    // Edit mode: switch the edited step between Join / Cut / New Body.
+    void setModeEdit(const IopContext& ctx, ExtrudeMode mode);
     void autoPickMode(const IopContext& ctx);
     void setModeManual(const IopContext& ctx, ExtrudeMode mode);
 
@@ -175,6 +177,9 @@ private:
     TopoDS_Shape m_origProfile;
     int m_origSketchId = -1;
     bool m_profileEdited = false;
+    ExtrudeMode m_origMode = ExtrudeMode::NewBody;   // edit: mode when it began
+    int m_origTarget = -1;
+    bool m_modeEdited = false;
     // Edit mode: the step's sketch, shown while picking because it was hidden.
     int m_shownSketch = -1;
     int profileCount() const;

@@ -124,7 +124,7 @@ const WsCmd kCmdSplit   {MZ_ICON_SPLIT,   "Split",   ToolAction::Split, nullptr,
 const WsCmd kCmdLoft    {MZ_ICON_SPLINE,  "Loft",    ToolAction::None, "Loft", kSelS | kSelR | kSelF | kSelB, 2, false};
 const WsCmd kCmdRemove  {MZ_ICON_REPAIR,  "Remove",  ToolAction::RemoveFace, nullptr, kSelF, 1, false};
 // Delete: whole bodies, or with "Faces only" just the picked faces.
-const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::DeleteSmart, nullptr, kSelB, 1, false};
+const WsCmd kCmdDelete  {MZ_ICON_DELETE,  "Delete",  ToolAction::DeleteSmart, nullptr, kSelB | kSelF, 1, false};
 const WsCmd kCmdMeasure {MZ_ICON_MEASURE, "Measure", ToolAction::Measure, nullptr, 0, 0, false};
 // Sweep: the profile sketch first, then the path sketch.
 const WsCmd kCmdSweep   {MZ_ICON_SPLINE,  "Sweep",   ToolAction::Sweep, nullptr, kSelS | kSelR | kSelB, 2, false};
@@ -1074,8 +1074,6 @@ void Application::renderImTouchLayout() {
                         pc.action = static_cast<int>(c.action);
                         pc.plugin = c.plugin;
                         pc.typeMask = c.mask;
-                        if (c.action == ToolAction::DeleteSmart)
-                            pc.typeMask = m_deleteMode == 0 ? kSelB : kSelF;
                         pc.minCount = c.minCount;
                         pc.single = c.single;
                         startWorkspaceCommand(pc);
@@ -1767,29 +1765,11 @@ void Application::renderPendingCommandBar() {
         ImGui::TextColored(touchui::textDim(), materializr::tr("%d selected"), count);
         ImGui::SameLine(0.0f, 16.0f * s);
         ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
-        // Delete: Bodies | Faces (left open) | Heal (neighbours extended).
+        // Delete: faces or bodies (Fusion). Heal: deleted faces are closed
+        // by extending their neighbours; off leaves the body open.
         if (m_pendingCmd.action == static_cast<int>(ToolAction::DeleteSmart)) {
-            int mode = m_deleteMode;
-            if (touchui::pillButton("delBodies", MZ_ICON_BODY, materializr::tr("Bodies"), mode == 0))
-                mode = 0;
-            ImGui::SameLine(0.0f, 6.0f * s);
-            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
-            if (touchui::pillButton("delFaces", MZ_ICON_DELETE, materializr::tr("Faces"), mode == 1))
-                mode = 1;
-            ImGui::SameLine(0.0f, 6.0f * s);
-            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
-            if (touchui::pillButton("delHeal", MZ_ICON_REPAIR, materializr::tr("Heal"), mode == 2))
-                mode = 2;
-            if (mode != m_deleteMode) {
-                m_deleteMode = mode;
-                m_pendingCmd.typeMask = mode == 0 ? kSelB : kSelF;
-                // Keep only what the new mode takes.
-                std::vector<SelectionEntry> drop;
-                for (const auto& e : m_selection->getSelection())
-                    if (!(m_pendingCmd.typeMask & (1u << static_cast<unsigned>(e.type))))
-                        drop.push_back(e);
-                for (const auto& e : drop) m_selection->removeFromSelection(e);
-            }
+            if (touchui::pillButton("delHeal", MZ_ICON_REPAIR, materializr::tr("Heal"), m_deleteHeal))
+                m_deleteHeal = !m_deleteHeal;
             ImGui::SameLine(0.0f, 12.0f * s);
             ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
         }

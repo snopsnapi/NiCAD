@@ -214,14 +214,16 @@ void main() {
     }
 
     if (u_previewCut) {
-        result = mix(result, vec3(0.9, 0.1, 0.1), 0.55);
+        result = mix(result, vec3(0.92, 0.18, 0.16), 0.7);
     }
 
     if (u_selected) {
         result = mix(result, vec3(0.3, 0.5, 1.0), 0.3);
     }
 
-    fragColor = vec4(result, 1.0);
+    // Fork: a cut preview is a see-through red volume (Fusion), drawn after
+    // the opaque bodies with blending and no depth test.
+    fragColor = vec4(result, u_previewCut ? 0.38 : 1.0);
 }
 )";
 
@@ -973,9 +975,27 @@ void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     // structural and scene-wide.
     glDepthFunc(GL_LEQUAL);
     const int slotCount = static_cast<int>(m_meshes.size());
+    bool anyCut = false;
+    for (const auto& m : m_meshes)
+        if (m.vertexCount > 0 && m.subtractPreview) { anyCut = true; break; }
+    for (int pass = 0; pass < (anyCut ? 2 : 1); ++pass) {
+    const bool cutPass = (pass == 1);
+    GLboolean blendWas = GL_FALSE;
+    if (cutPass) {
+        // See-through red tool volume over everything (Fusion's cut preview).
+        blendWas = glIsEnabled(GL_BLEND);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_DEPTH_TEST);
+    }
     for (int slot = 0; slot < slotCount; ++slot) {
         const auto& mesh = m_meshes[slot];
         if (mesh.vertexCount == 0) continue; // vacant slot
+        // Fork: cut previews go in the see-through pass below - drawn opaque
+        // they sat inside the target and z-fought it into mush.
+        if (mesh.subtractPreview && !cutPass) continue;
+        if (cutPass && !mesh.subtractPreview) continue;
         glUniformMatrix4fv(m_meshLoc_model, 1, GL_FALSE, glm::value_ptr(mesh.modelMatrix));
         glUniform3fv(m_meshLoc_objectColor, 1, glm::value_ptr(mesh.color));
         const SurfaceFinish& fin = mesh.finish;
@@ -1012,6 +1032,12 @@ void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
         glBindVertexArray(mesh.vao);
         glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
     }
+    if (cutPass) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        if (!blendWas) glDisable(GL_BLEND);
+    }
+    }   // pass
     glDepthFunc(GL_LESS);   // restore the default for every later pass
 
     glActiveTexture(GL_TEXTURE0 + kProbeTextureUnit);

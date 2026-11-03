@@ -36,6 +36,30 @@ public:
         m_recoveredProfile.Nullify();
     }
 
+    // Fork (Edit Feature's Join / Cut / New Body): switch the mode on the
+    // NEXT execute. A replay undoes this step in its old mode first, then
+    // executes it in the new one - setting m_mode directly would undo it in
+    // the wrong mode. A New Body result's id is kept across a round trip so
+    // later steps that use it find it again.
+    void requestModeChange(ExtrudeMode mode, int targetBody) {
+        m_pendingMode = static_cast<int>(mode);
+        m_pendingTarget = targetBody;
+    }
+    // A failed edit replay restores these with the bodies (History).
+    void snapshotEditState() override {
+        m_snap = {m_mode, m_targetBodyId, m_createdBodyId, m_savedCreatedId,
+                  m_previousTargetShape, true};
+    }
+    void restoreEditState() override {
+        if (!m_snap.valid) return;
+        m_mode = m_snap.mode;
+        m_targetBodyId = m_snap.target;
+        m_createdBodyId = m_snap.created;
+        m_savedCreatedId = m_snap.savedCreated;
+        m_previousTargetShape = m_snap.prevTarget;
+        m_pendingMode = -1;
+    }
+
     // Getters
     double getDistance() const { return m_distance; }
     ExtrudeDirection getDirection() const { return m_direction; }
@@ -118,6 +142,16 @@ protected:   // fork: SurfaceExtrudeOp reuses the distance / created-body state
     // user later deleted/moved that geometry) - historically correct, and
     // never the catastrophic every-region fallback (#53).
     TopoDS_Shape m_recoveredProfile;
+    // Fork: Edit Feature mode switch (requestModeChange) and its snapshot.
+    int m_pendingMode = -1;
+    int m_pendingTarget = -1;
+    int m_savedCreatedId = -1;
+    struct ModeSnap {
+        ExtrudeMode mode = ExtrudeMode::NewBody;
+        int target = -1, created = -1, savedCreated = -1;
+        TopoDS_Shape prevTarget;
+        bool valid = false;
+    } m_snap;
     // The boolean-mode footprint recovery has run (or a save recorded its
     // outcome), so a reload must not pay for the cut again.
     bool m_recoveryTried = false;
