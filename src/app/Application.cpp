@@ -8416,8 +8416,7 @@ struct SlowFrameLog {
         int k = std::snprintf(buf, sizeof(buf), "[slowframe] %.0f ms:", total);
         for (int i = 0; i < n && k > 0 && k < (int)sizeof(buf); ++i)
             k += std::snprintf(buf + k, sizeof(buf) - k, " %s=%.0f", names[i], ms[i]);
-        std::fprintf(stderr, "%s
-", buf);
+        std::fprintf(stderr, "%s\n", buf);
     }
 };
 SlowFrameLog g_slowFrame;
