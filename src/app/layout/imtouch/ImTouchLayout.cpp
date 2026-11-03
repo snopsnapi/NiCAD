@@ -96,6 +96,14 @@ constexpr unsigned kSelA = 1u << static_cast<unsigned>(SelectionType::Axis);
 constexpr unsigned kSelC = 1u << static_cast<unsigned>(SelectionType::CurvePoint);
 constexpr unsigned kSelForm = 1u << static_cast<unsigned>(SelectionType::Form);
 constexpr unsigned kSelO = 1u << static_cast<unsigned>(SelectionType::OriginPlane);
+// Fork: Move's two pick modes. Bodies takes whole bodies (and the non-solid
+// things the gizmo moves), never their faces or edges; Faces takes faces.
+constexpr unsigned kMoveBodies = (1u << static_cast<unsigned>(SelectionType::Body)) |
+    (1u << static_cast<unsigned>(SelectionType::Sketch)) |
+    (1u << static_cast<unsigned>(SelectionType::SketchRegion)) |
+    (1u << static_cast<unsigned>(SelectionType::Plane)) |
+    (1u << static_cast<unsigned>(SelectionType::Axis)) |
+    (1u << static_cast<unsigned>(SelectionType::CurvePoint));
 
 // One rail command: a ToolAction, or a plugin contribution by name. minCount
 // 0 = no input (fires at once); single = fires on the first matching pick.
@@ -1076,6 +1084,17 @@ void Application::renderImTouchLayout() {
                         pc.typeMask = c.mask;
                         pc.minCount = c.minCount;
                         pc.single = c.single;
+                        if (c.action == ToolAction::Move && m_selection) {
+                            // A preselected face (and no body) means Faces.
+                            bool face = false, body = false;
+                            for (const auto& e : m_selection->getSelection()) {
+                                face |= e.type == SelectionType::Face;
+                                body |= e.type == SelectionType::Body;
+                            }
+                            if (face && !body) m_moveFacesMode = true;
+                            else if (body) m_moveFacesMode = false;
+                            pc.typeMask = m_moveFacesMode ? kSelF : kMoveBodies;
+                        }
                         startWorkspaceCommand(pc);
                         if (inPopup) ImGui::CloseCurrentPopup();
                     }
@@ -1784,7 +1803,7 @@ void Application::renderPendingCommandBar() {
                 mode = 1;
             if ((mode == 1) != m_moveFacesMode) {
                 m_moveFacesMode = (mode == 1);
-                m_pendingCmd.typeMask = m_moveFacesMode ? kSelF : kSelB;
+                m_pendingCmd.typeMask = m_moveFacesMode ? kSelF : kMoveBodies;
                 std::vector<SelectionEntry> drop;
                 for (const auto& e : m_selection->getSelection())
                     if (!(m_pendingCmd.typeMask & (1u << static_cast<unsigned>(e.type))))
