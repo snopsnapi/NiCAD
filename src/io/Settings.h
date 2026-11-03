@@ -65,6 +65,7 @@ struct AppSettings {
     bool imTouchTimeline    = true;
     // Fork: im-touch workspace tab (0 = Solid, 1 = Surface, 2 = Form).
     int  imTouchWorkspace   = 0;
+    bool showOrigin         = true;   // fork: origin planes in the viewport
     int  touchRightTab      = 0;    // shell right panel: 0 = Items, 1 = History & Properties
     // Shell right-panel width in logical px (× uiScale at use) - written by
     // the panel's left-edge drag splitter / edge tab.

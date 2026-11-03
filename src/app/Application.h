@@ -1341,6 +1341,17 @@ private:
     int formStepForId(int formId) const;
     bool beginEditForm(int step);
     int selectedFormId() const;
+
+    // ── Fork: origin (Application_Form.cpp) ──
+    // Three translucent base planes + axes at the world origin, tappable
+    // (SelectionType::OriginPlane). Shown when m_showOrigin, and always
+    // while a command waits for a plane (Sketch). Toggle on the right edge.
+    bool m_showOrigin = true;
+    bool originVisible() const;
+    float originHalfSize() const;   // world size giving a steady screen size
+    // Nearest origin plane under window-local (x, y): which = 0 XY, 1 XZ,
+    // 2 YZ; t = ray distance. False on a miss.
+    bool pickOriginPlane(float x, float y, float vpW, float vpH, int& which, double& t) const;
     std::vector<CurvePointRef> curvePoints() const;
     // Nearest point within `radiusPx` of window-local (x, y); false if none.
     bool pickCurvePoint(float x, float y, float vpW, float vpH, float radiusPx,

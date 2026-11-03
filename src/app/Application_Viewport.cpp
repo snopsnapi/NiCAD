@@ -3057,6 +3057,53 @@ void Application::renderViewport() {
                 mdl->PopClipRect();
             }
 
+            // Fork: origin - three translucent base planes and the axes.
+            if (originVisible()) {
+                const float h = originHalfSize();
+                const float dp = uiScale();
+                int selPlane = -1;
+                for (const auto& e : m_selection->getSelection())
+                    if (e.type == SelectionType::OriginPlane) selPlane = e.subShapeIndex;
+                // XY (normal world Y) blue, XZ (normal Z) green, YZ (normal X) red.
+                const int normalAxis[3] = {1, 2, 0};
+                const ImU32 fill[3] = {IM_COL32(70, 120, 235, 46), IM_COL32(70, 200, 110, 46),
+                                       IM_COL32(230, 80, 80, 46)};
+                const ImU32 edge[3] = {IM_COL32(90, 140, 255, 190), IM_COL32(90, 220, 130, 190),
+                                       IM_COL32(245, 100, 100, 190)};
+                static const char* kNames[3] = {"XY", "XZ", "YZ"};
+                for (int k = 0; k < 3; ++k) {
+                    const int n = normalAxis[k], u = (n + 1) % 3, v = (n + 2) % 3;
+                    ImVec2 q[4];
+                    bool ok = true;
+                    const float su[4] = {-1, 1, 1, -1}, sv[4] = {-1, -1, 1, 1};
+                    for (int c = 0; c < 4; ++c) {
+                        glm::vec3 p(0.0f);
+                        p[u] = su[c] * h;
+                        p[v] = sv[c] * h;
+                        ok &= toImg(p, q[c]);
+                    }
+                    if (!ok) continue;
+                    const bool sel = (k == selPlane);
+                    dl->AddQuadFilled(q[0], q[1], q[2], q[3],
+                                      sel ? IM_COL32(255, 216, 26, 70) : fill[k]);
+                    dl->AddQuad(q[0], q[1], q[2], q[3],
+                                sel ? IM_COL32(255, 216, 26, 255) : edge[k], (sel ? 2.5f : 1.5f) * dp);
+                    dl->AddText(ImVec2(q[2].x + 4.0f * dp, q[2].y), edge[k], kNames[k]);
+                }
+                ImVec2 o;
+                if (toImg(glm::vec3(0.0f), o)) {
+                    const ImU32 axisCol[3] = {IM_COL32(230, 80, 80, 220), IM_COL32(70, 200, 110, 220),
+                                              IM_COL32(70, 120, 235, 220)};
+                    for (int a = 0; a < 3; ++a) {
+                        glm::vec3 tip(0.0f);
+                        tip[a] = h * 1.3f;
+                        ImVec2 t;
+                        if (toImg(tip, t)) dl->AddLine(o, t, axisCol[a], 2.0f * dp);
+                    }
+                    dl->AddCircleFilled(o, 4.0f * dp, IM_COL32(235, 240, 250, 255));
+                }
+            }
+
             // Fork: Studio Spline points - dots on every visible 3D curve
             // (selected ones larger, in the selection yellow).
             if (!m_inSketchMode) {
@@ -5925,6 +5972,25 @@ void Application::renderViewport() {
                             if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
                             else m_selection->select(entry);
                             regionConsumedClick = true;
+                        }
+                    }
+                    // Fork: a tap on an origin plane (unless a body is in front).
+                    if (!regionConsumedClick && clickSelectionAllowed && selectClicked &&
+                        originVisible() && pendingAllows(SelectionType::OriginPlane)) {
+                        int which = -1;
+                        double t = 0.0;
+                        if (pickOriginPlane(localX, localY, contentSize.x, contentSize.y, which, t)) {
+                            const bool bodyInFront =
+                                result.hit &&
+                                glm::length(result.hitPoint - cam.getPosition()) < static_cast<float>(t) - 1e-3f;
+                            if (!bodyInFront) {
+                                SelectionEntry entry;
+                                entry.type = SelectionType::OriginPlane;
+                                entry.subShapeIndex = which;
+                                if (io.KeyCtrl || pendingPick) m_selection->toggleSelection(entry);
+                                else m_selection->select(entry);
+                                regionConsumedClick = true;
+                            }
                         }
                     }
                     // Fork: a tap on a Form selects it (forms are not bodies).

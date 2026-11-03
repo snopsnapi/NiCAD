@@ -98,4 +98,49 @@ bool Application::beginEditForm(int step) {
     return ok;
 }
 
+// ── Origin ──────────────────────────────────────────────────────────────────
+
+bool Application::originVisible() const {
+    if (m_inSketchMode) return false;
+    if (m_showOrigin) return true;
+    return m_pendingCmd.active && pendingAllows(SelectionType::OriginPlane);
+}
+
+float Application::originHalfSize() const {
+    if (!m_viewport) return 20.0f;
+    const glm::vec3 eye = m_viewport->getCamera().getPosition();
+    return std::max(1.0f, glm::length(eye) * 0.12f);
+}
+
+bool Application::pickOriginPlane(float x, float y, float vpW, float vpH, int& which,
+                                  double& tOut) const {
+    if (!m_viewport || vpW <= 0.0f || vpH <= 0.0f) return false;
+    const Camera& cam = m_viewport->getCamera();
+    const glm::mat4 inv = glm::inverse(cam.getProjectionMatrix() * cam.getViewMatrix());
+    const float nx = x / vpW * 2.0f - 1.0f, ny = 1.0f - y / vpH * 2.0f;
+    glm::vec4 a = inv * glm::vec4(nx, ny, -1.0f, 1.0f);
+    glm::vec4 b = inv * glm::vec4(nx, ny, 1.0f, 1.0f);
+    a /= a.w;
+    b /= b.w;
+    const glm::vec3 o(a), d = glm::normalize(glm::vec3(b) - glm::vec3(a));
+    const float h = originHalfSize();
+    // XY: normal Y (world), XZ: normal Z, YZ: normal X.
+    const int normalAxis[3] = {1, 2, 0};
+    bool hit = false;
+    double best = 1e300;
+    for (int k = 0; k < 3; ++k) {
+        const int n = normalAxis[k];
+        if (std::abs(d[n]) < 1e-6f) continue;
+        const float t = -o[n] / d[n];
+        if (t <= 0.0f) continue;
+        const glm::vec3 p = o + d * t;
+        bool inside = true;
+        for (int c = 0; c < 3; ++c)
+            if (c != n && std::abs(p[c]) > h) inside = false;
+        if (inside && t < best) { best = t; which = k; hit = true; }
+    }
+    if (hit) tOut = best;
+    return hit;
+}
+
 } // namespace materializr

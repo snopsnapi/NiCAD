@@ -18,7 +18,10 @@ enum class SelectionType {
     // subShapeIndex = the point's index in its StudioSplineOp.
     CurvePoint,
     // Fork: a Form (T-spline-style cage); bodyId = the form id.
-    Form
+    Form,
+    // Fork: an origin plane; subShapeIndex 0 = XY (top), 1 = XZ (front),
+    // 2 = YZ (right) - the same planes as the XY / XZ / YZ sketch starts.
+    OriginPlane
 };
 
 struct SelectionEntry {

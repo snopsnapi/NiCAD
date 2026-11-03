@@ -2100,6 +2100,7 @@ AppSettings Application::currentSettings() const {
     s.imTouchTree = m_imTouchTree;
     s.imTouchTimeline = m_imTouchTimeline;
     s.imTouchWorkspace = m_imTouchWorkspace;
+    s.showOrigin = m_showOrigin;
     s.touchRightTab = m_touchRightTab;
     s.touchRightW = m_touchRightW;
     s.touchRailW = m_touchRailW;
@@ -2203,6 +2204,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_imTouchTree = s.imTouchTree;
     m_imTouchTimeline = s.imTouchTimeline;
     m_imTouchWorkspace = s.imTouchWorkspace;
+    m_showOrigin = s.showOrigin;
     m_showFps = s.showFps;
     m_touchRightTab = (s.touchRightTab == 1) ? 1 : 0;
     m_touchRightW = s.touchRightW;
@@ -2380,6 +2382,16 @@ void Application::handleToolAction(int action) {
                 if (entry.type == SelectionType::Plane && entry.planeId >= 0) {
                     const auto* p = m_document->getPlane(entry.planeId);
                     if (p) enterSketchOnPlane(p->plane);
+                    break;
+                }
+                // Fork: an origin plane - the same canonical starts (and
+                // camera framing) as the XY / XZ / YZ actions.
+                if (entry.type == SelectionType::OriginPlane) {
+                    const int w = entry.subShapeIndex;
+                    m_selection->clear();
+                    handleToolAction(static_cast<int>(w == 1 ? ToolAction::StartSketchXZ
+                                                     : w == 2 ? ToolAction::StartSketchYZ
+                                                              : ToolAction::StartSketchXY));
                     break;
                 }
             }

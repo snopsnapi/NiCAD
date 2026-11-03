@@ -95,6 +95,7 @@ constexpr unsigned kSelP = 1u << static_cast<unsigned>(SelectionType::Plane);
 constexpr unsigned kSelA = 1u << static_cast<unsigned>(SelectionType::Axis);
 constexpr unsigned kSelC = 1u << static_cast<unsigned>(SelectionType::CurvePoint);
 constexpr unsigned kSelForm = 1u << static_cast<unsigned>(SelectionType::Form);
+constexpr unsigned kSelO = 1u << static_cast<unsigned>(SelectionType::OriginPlane);
 
 // One rail command: a ToolAction, or a plugin contribution by name. minCount
 // 0 = no input (fires at once); single = fires on the first matching pick.
@@ -114,7 +115,8 @@ struct WsGroup {
     std::vector<WsCmd> cmds;
 };
 
-const WsCmd kCmdSketch  {MZ_ICON_SKETCH,  "Sketch",  ToolAction::SketchOnFace, nullptr, kSelF | kSelP, 1, true};
+// Sketch: tap any plane - an origin plane, a construction plane or a flat face.
+const WsCmd kCmdSketch  {MZ_ICON_SKETCH,  "Sketch",  ToolAction::SketchOnFace, nullptr, kSelF | kSelP | kSelO, 1, true};
 const WsCmd kCmdMove    {MZ_ICON_MOVE,    "Move",    ToolAction::Move, nullptr,
                          kSelB | kSelF | kSelE | kSelS | kSelR | kSelP | kSelA | kSelC, 1, false};
 const WsCmd kCmdMirror  {MZ_ICON_MIRROR,  "Mirror",  ToolAction::Mirror, nullptr, kSelB, 1, false};
@@ -343,9 +345,9 @@ void Application::renderImTouchLayout() {
                     if (e.type == t) ++n;
                 static const char* kNames[] = { "None", "Body", "Face", "Edge",
                                                 "Vertex", "Sketch", "Region",
-                                                "Plane", "Axis", "Point", "Form" };
+                                                "Plane", "Axis", "Point", "Form", "Origin" };
                 const int ti = static_cast<int>(t);
-                if (ti > 0 && ti < 11) {
+                if (ti > 0 && ti < 12) {
                     sel = std::string("  ·  ") + kNames[ti] +
                           " (" + std::to_string(n) + ")";
                 }
@@ -1163,6 +1165,23 @@ void Application::renderImTouchLayout() {
 
     renderPendingCommandBar();   // fork: command-first rail
 
+    // Fork: origin show/hide, on the right edge (outside a sketch).
+    if (!m_inSketchMode) {
+        ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, wp.y + ws.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(1.0f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.92f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, touchui::panelBg());
+        if (ImGui::Begin("##LiteOrigin", nullptr, kFloat)) {
+            if (touchui::railButton("originToggle", MZ_ICON_AXES, materializr::tr("Origin"),
+                                    m_showOrigin, 64.0f * s)) {
+                m_showOrigin = !m_showOrigin;
+                saveAppSettings();
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
+
     // ── Bottom-right corner: in a sketch, the commit actions - an accent
     //    ✓ Finish FAB with a smaller ✗ Discard beside it (gap so a Finish tap
     //    can't stray onto Discard). During a live ACTION (push/pull, extrude,
@@ -1731,7 +1750,6 @@ void Application::renderPendingCommandBar() {
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus;
     bool ok = false, cancel = false;
-    int originPlane = -1;
     if (ImGui::Begin("##PendingCmd", nullptr, flags)) {
         const float side = 44.0f * s;
         const float textY = ImGui::GetCursorPosY() + (side - ImGui::GetFontSize()) * 0.5f;
@@ -1742,14 +1760,6 @@ void Application::renderPendingCommandBar() {
         ImGui::TextColored(touchui::textDim(), materializr::tr("%d selected"), count);
         ImGui::SameLine(0.0f, 16.0f * s);
         ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
-        if (m_pendingCmd.action == static_cast<int>(ToolAction::SketchOnFace)) {
-            static const char* const kPlanes[3] = { "XY", "XZ", "YZ" };
-            for (int i = 0; i < 3; ++i) {
-                if (ImGui::Button(kPlanes[i], ImVec2(side * 1.2f, side))) originPlane = i;
-                ImGui::SameLine(0.0f, 6.0f * s);
-            }
-            ImGui::SameLine(0.0f, 10.0f * s);
-        }
         cancel = touchui::iconButton("pcCancel", MZ_ICON_DISCARD, side);
         if (!m_pendingCmd.single) {
             ImGui::SameLine(0.0f, 10.0f * s);
@@ -1761,13 +1771,7 @@ void Application::renderPendingCommandBar() {
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    if (originPlane >= 0) {
-        cancelPendingCommand();
-        const ToolAction a = originPlane == 0 ? ToolAction::StartSketchXY
-                           : originPlane == 1 ? ToolAction::StartSketchXZ
-                                              : ToolAction::StartSketchYZ;
-        handleToolAction(static_cast<int>(a));
-    } else if (cancel) {
+    if (cancel) {
         cancelPendingCommand();
     } else if (ok) {
         firePendingCommand();
