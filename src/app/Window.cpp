@@ -634,6 +634,7 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
             m_downTicks = platformTicksMs();   // begin press-and-hold tracking
             m_downX = m_fingers[0].x; m_downY = m_fingers[0].y;
             m_movedBeyondHold = false;
+            m_pressMaxMove2 = 0.0f;
             m_holdSelect = false;
             m_panelScroll = false;
             m_scrollArmed = false;
@@ -643,6 +644,7 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
             // a box-select; a hold that never moves is a long-press (menu).
             const float dx = m_fingers[0].x - m_downX, dy = m_fingers[0].y - m_downY;
             if (dx * dx + dy * dy > 25.0f * 25.0f) m_movedBeyondHold = true; // a drag
+            m_pressMaxMove2 = std::max(m_pressMaxMove2, dx * dx + dy * dy);
             // Touch drag-to-scroll: over a panel (anything but the 3D canvas), a
             // vertical-dominant drag scrolls the window the finger is over, like
             // a mobile list. Horizontal drags fall through untouched so sliders
@@ -734,7 +736,27 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
     }
 
     // count == 0: everything lifted - release and reset.
-    if (m_leftDown) { io.AddMouseButtonEvent(0, false); m_leftDown = false; }
+    if (m_leftDown) {
+        // Fork: on the left tool rail a press that travelled past a tap's
+        // slop is a swipe that never latched into a scroll (too short, too
+        // sideways, or lifted before the latch frame) - NOT a tap. Releasing
+        // over the button fired its command, and a few jerky swipes queued a
+        // run of operations that then took ages to compute. Release
+        // off-screen instead, so no button fires.
+        bool railSwipe = false;
+        if (materializr::touchMode() && !m_touchOnCanvas && !m_panelScroll) {
+            const float slop = 12.0f * uiScale();
+            ImGuiContext* g = ImGui::GetCurrentContext();
+            const ImGuiWindow* hw = g ? g->HoveredWindow : nullptr;
+            const ImGuiWindow* root = hw ? hw->RootWindow : nullptr;
+            const bool onRail = root && root->Name &&
+                                std::strncmp(root->Name, "##LiteToolBar", 13) == 0;
+            railSwipe = onRail && m_pressMaxMove2 > slop * slop;
+        }
+        if (railSwipe) io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        io.AddMouseButtonEvent(0, false);
+        m_leftDown = false;
+    }
     // Multi-finger tap: a short 2-/3-finger contact that never committed to
     // pan/zoom and barely moved = undo/redo gesture (Application consumes the
     // flags with the same guards as the Edit menu). Checked before the reset

@@ -1687,6 +1687,15 @@ int Application::pendingMatchCount() const {
 }
 
 void Application::startWorkspaceCommand(const PendingCommand& cmd) {
+    // Fork: anti-spam. A command can run at once on the preselection, so a
+    // burst of taps (or swipes read as taps) queued a run of operations.
+    // Ignore a second command within half a second, and any while a heavy
+    // operation is still waiting to compute.
+    {
+        const double now = ImGui::GetTime();
+        if (!m_deferredHeavy.empty() || now - m_lastWsCmdTime < 0.5) return;
+        m_lastWsCmdTime = now;
+    }
     cancelPendingCommand();
     m_pendingCmd = cmd;
     m_pendingCmd.active = true;

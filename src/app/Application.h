@@ -1309,6 +1309,8 @@ private:
     bool pendingAllows(SelectionType t) const;
     int pendingMatchCount() const;
     void startWorkspaceCommand(const PendingCommand& cmd);
+    // Fork: rail anti-spam - when the last workspace command started.
+    double m_lastWsCmdTime = -10.0;
     void firePendingCommand();
     void cancelPendingCommand() { m_pendingCmd = PendingCommand(); }
     void renderPendingCommandBar();

@@ -206,6 +206,7 @@ private:
     bool  m_singleTapPending = false;     // a genuine single tap lifted (see consumeSingleTap)
     float m_singleTapX = 0.0f, m_singleTapY = 0.0f;
     bool  m_movedBeyondHold = false;      // moved too far -> it's a drag, not a hold
+    float m_pressMaxMove2 = 0.0f;         // fork: farthest (squared px) the press travelled
     bool  m_holdSelect = false;           // hold threshold passed; select-drag mode
     bool  m_textInputActive = false;      // soft keyboard currently raised
     bool  m_leftReleaseWasGesture = false; // last left-up was a 2-finger takeover
