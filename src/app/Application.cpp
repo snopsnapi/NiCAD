@@ -8394,6 +8394,35 @@ void Application::restoreProjectRecoveryNow() {
         showToast(materializr::trFormat("%d recovered project(s) couldn't be reopened.", failed));
 }
 
+// Fork: slow-frame log. Any rendered frame over 50 ms prints how long each
+// part of it took (logcat, tag stderr) - finds what stalls the tablet.
+namespace {
+struct SlowFrameLog {
+    using clk = std::chrono::steady_clock;
+    clk::time_point t0, last;
+    const char* names[10] = {};
+    double ms[10] = {};
+    int n = 0;
+    void start() { t0 = last = clk::now(); n = 0; }
+    void mark(const char* nm) {
+        const auto t = clk::now();
+        if (n < 10) { names[n] = nm; ms[n] = std::chrono::duration<double, std::milli>(t - last).count(); ++n; }
+        last = t;
+    }
+    void report() {
+        const double total = std::chrono::duration<double, std::milli>(last - t0).count();
+        if (total < 50.0) return;
+        char buf[512];
+        int k = std::snprintf(buf, sizeof(buf), "[slowframe] %.0f ms:", total);
+        for (int i = 0; i < n && k > 0 && k < (int)sizeof(buf); ++i)
+            k += std::snprintf(buf + k, sizeof(buf) - k, " %s=%.0f", names[i], ms[i]);
+        std::fprintf(stderr, "%s
+", buf);
+    }
+};
+SlowFrameLog g_slowFrame;
+} // namespace
+
 void Application::run() {
     // A draft surviving from a previous session means it ended mid-sketch
     // (crash / kill / quit while drawing) - offer to restore on first frame.
@@ -8606,6 +8635,7 @@ void Application::run() {
         // at the bottom of the loop (measured after the event wait so the
         // idle floor's own sleep doesn't count against the budget).
         const uint32_t frameLoopStartMs = platformTicksMs();
+        g_slowFrame.start();
 #if !defined(MZ_MOBILE)
         const uint64_t frameLoopStartNs = platformTicksNs();
 #endif
@@ -8787,7 +8817,9 @@ void Application::run() {
         if (m_wakeFrames > 0) m_wakeFrames--;
         ++perfRendered;   // passed the idle skip → this iteration renders a frame
 
+        g_slowFrame.mark("pre");
         beginFrame();
+        g_slowFrame.mark("begin");
         // With the modern/im-touch layouts on, the touch theme wraps the WHOLE
         // frame so every dialog / interactive-op popup matches the shell look
         // (rounded, padded, dark) instead of the classic desktop style. Latched
@@ -8837,11 +8869,13 @@ void Application::run() {
                 if (!landingPageUp()) renderImTouchLayout();
                 break;
         }
+        g_slowFrame.mark("layout");
         renderSmallScreenWarning();
         renderSketchExportDialog();
 
         if (m_renderersReady) {
             renderViewport();
+            g_slowFrame.mark("viewport");
             // Modern's panel pop-in/out edge tabs go on top of the viewport -
             // submit them AFTER it (they'd otherwise render under the
             // NoBringToFrontOnFocus Viewport window until a focus reorder).
@@ -9062,6 +9096,7 @@ void Application::run() {
             if (classicLayout() && !landingPageUp() && !m_leftPanelHidden &&
                 m_showTools) {
                 action = m_toolbar->render();
+                g_slowFrame.mark("toolbar");
                 m_sketchGridStep = m_toolbar->getGridStep();
                 (void)m_toolbar->getSnapToGrid(); m_snapToGrid = false;   // fork: grid snap removed
                 // The toolbar owns neither the step nor the toggle any more -
@@ -9361,7 +9396,10 @@ void Application::run() {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
+        g_slowFrame.mark("ui");
         endFrame();
+        g_slowFrame.mark("gl");
+        g_slowFrame.report();
 
         // A heavy task queued this frame runs at the top of the next iteration;
         // keep this frame for its progress window to paint behind.
