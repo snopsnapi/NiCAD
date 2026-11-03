@@ -874,10 +874,11 @@ void ExtrudeOp::renderProperties() {
 
     materializr::lengthField(materializr::tr("Distance"), &m_distance);
 
-    const char* modeItems[] = { materializr::tr("New Body"), materializr::tr("Union"),
-                                materializr::tr("Subtract"), materializr::tr("Intersect") };
+    // Fork: Fusion's three - New Body, Join, Cut (no Intersect).
+    const char* modeItems[] = { materializr::tr("New Body"), materializr::tr("Join"),
+                                materializr::tr("Cut") };
     int modeIndex = static_cast<int>(m_mode);
-    if (ImGui::Combo(materializr::tr("Mode"), &modeIndex, modeItems, 4)) {
+    if (ImGui::Combo(materializr::tr("Mode"), &modeIndex, modeItems, 3)) {
         m_mode = static_cast<ExtrudeMode>(modeIndex);
     }
 

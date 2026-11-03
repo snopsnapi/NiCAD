@@ -125,6 +125,17 @@ private:
     // the single-target case.
     void commitCutAll(const IopContext& ctx, const std::vector<int>& targets);
 
+    // Fork: Fusion-style operation row (Join / Cut / New Body). Until the
+    // user taps one, the mode follows the drag: into a body = Cut, out of the
+    // face the profile sits on = Join, in free space = New Body.
+    bool m_modeAuto = false;
+    int  m_autoSign = 0;        // sign of the distance the auto mode was picked for
+    int  m_joinHost = -1;       // body the profile lies flat on, or -1
+    bool m_enteredAsCut = false; // started from the Subtract tool (arrow aims in)
+    int  findJoinHost(const IopContext& ctx) const;
+    void autoPickMode(const IopContext& ctx);
+    void setModeManual(const IopContext& ctx, ExtrudeMode mode);
+
     TopoDS_Shape m_profile;
     ExtrudeMode m_mode = ExtrudeMode::NewBody;
     int m_targetBody = -1;

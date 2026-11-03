@@ -133,6 +133,14 @@ bool ExtrudeController::beginExtrude(const IopContext& ctx,
     m_mode = mode;
     m_targetBody = targetBody;
     m_sketchId = sourceSketchId;
+    if (!m_restarting) {
+        m_modeAuto = (mode == ExtrudeMode::NewBody);
+        m_enteredAsCut = (mode == ExtrudeMode::Subtract);
+    }
+    m_autoSign = 0;
+    // Before begin(): its first update already picks the auto mode, and the
+    // preview body (coplanar with the profile) must not pass for the host.
+    m_joinHost = findJoinHost(ctx);
     if (!begin(ctx)) return false;
     // The Profiles field starts armed (Fusion): taps add / remove profiles.
     if (!m_restarting) {
@@ -263,7 +271,7 @@ int ExtrudeController::onBegin(const IopContext& ctx) {
         ctx.selection.clear();
         return kNoTargetBody;
     }
-    if (m_mode == ExtrudeMode::Subtract) {
+    if (m_mode == ExtrudeMode::Subtract && m_enteredAsCut) {
         m_sweepSign = -1.0;
         if (m_targetBody < 0) {
             std::vector<TopoDS_Shape> bodies;
@@ -333,6 +341,7 @@ void ExtrudeController::update(const IopContext& ctx) {
     if (m_editingIndex < 0) {
         if (profileCleared()) return;   // nothing picked: no preview
         InteractiveOpController::update(ctx);
+        if (m_modeAuto && !m_surface) autoPickMode(ctx);
         return;
     }
     if (std::abs(m_distance) < 0.01f) return;   // no zero-length preview mid-drag
@@ -412,7 +421,73 @@ void ExtrudeController::commit(const IopContext& ctx) {
         }
         m_targetBody = target;
     }
+    if (active() && m_mode == ExtrudeMode::Union) {
+        // Join the body the profile sits on; failing that, one the sweep
+        // runs into. Touching nothing: there is nothing to join, so it
+        // becomes a new body rather than a refusal.
+        int t = m_targetBody >= 0 ? m_targetBody : m_joinHost;
+        if (t < 0) t = resolveCutTarget(ctx);
+        if (t < 0) {
+            m_mode = ExtrudeMode::NewBody;
+            if (ctx.toast)
+                ctx.toast(materializr::tr("Join: the extrude touches no body - made a new body."));
+        }
+        m_targetBody = t;
+    }
     InteractiveOpController::commit(ctx);
+}
+
+int ExtrudeController::findJoinHost(const IopContext& ctx) const {
+    for (const Pick& p : m_picks)
+        if (p.bodyId >= 0 && ctx.doc.isBodyVisible(p.bodyId)) return p.bodyId;
+    if (!ctx.findBodyUnderRegion || m_profile.IsNull()) return -1;
+    for (TopExp_Explorer ex(m_profile, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face f = TopoDS::Face(ex.Current());
+        Handle(Geom_Plane) pl = Handle(Geom_Plane)::DownCast(BRep_Tool::Surface(f));
+        if (pl.IsNull()) continue;
+        const int b = ctx.findBodyUnderRegion(f, pl->Pln());
+        if (b >= 0) return b;
+    }
+    return -1;
+}
+
+// Fusion's automatic operation: re-decided whenever the drag crosses the
+// profile (the only moment the answer can change for a profile on a face).
+void ExtrudeController::autoPickMode(const IopContext& ctx) {
+    const double d = opDistance();
+    if (std::abs(d) < 1e-6) return;
+    const int sign = d > 0.0 ? 1 : -1;
+    if (sign == m_autoSign) return;
+    const int previewId = previewBodyId();
+    if (previewId < 0) return;   // preview not built yet: next frame
+    TopoDS_Shape tool;
+    try { tool = ctx.doc.getBody(previewId); } catch (...) { return; }
+    if (tool.IsNull()) return;
+    m_autoSign = sign;
+    ExtrudeMode mode = ExtrudeMode::NewBody;
+    int target = -1;
+    const int cut = cutpick::pickCutTarget(cutCandidates(ctx, previewId), tool, m_joinHost);
+    if (cut >= 0) {
+        mode = ExtrudeMode::Subtract;
+        target = cut;
+    } else if (m_joinHost >= 0) {
+        mode = ExtrudeMode::Union;
+        target = m_joinHost;
+    }
+    if (mode != m_mode || target != m_targetBody) {
+        m_mode = mode;
+        m_targetBody = target;
+        if (ctx.markBodyDirty) ctx.markBodyDirty(previewId);   // red cut tint on / off
+    }
+}
+
+void ExtrudeController::setModeManual(const IopContext& ctx, ExtrudeMode mode) {
+    m_modeAuto = false;
+    m_mode = mode;
+    // Cut: the host is only a preference, the target is resolved at commit.
+    m_targetBody = (mode == ExtrudeMode::NewBody) ? -1 : m_joinHost;
+    const int previewId = previewBodyId();
+    if (previewId >= 0 && ctx.markBodyDirty) ctx.markBodyDirty(previewId);
 }
 
 std::vector<int> ExtrudeController::resolveAllCutTargets(
@@ -465,14 +540,15 @@ std::unique_ptr<Operation> ExtrudeController::buildCommitOp(const IopContext& ct
     // NewBody: the previewed instance IS the result - let the base record it
     // as-is. Subtract: the preview was only a tool volume, so hand back the
     // real boolean cut against the body the sketch was drawn on.
-    if (m_mode != ExtrudeMode::Subtract || m_targetBody < 0) {
+    if ((m_mode != ExtrudeMode::Subtract && m_mode != ExtrudeMode::Union) ||
+        m_targetBody < 0) {
         std::fprintf(stdout, "Extruded %.1f mm\n", m_distance);
         return nullptr;
     }
     auto op = std::make_unique<ExtrudeOp>();
     op->setProfile(m_profile);
     op->setDistance(opDistance());
-    op->setMode(ExtrudeMode::Subtract);
+    op->setMode(m_mode);
     op->setTargetBody(m_targetBody);
     op->setSketchSource(m_sketchId);
     std::fprintf(stdout, "Subtracted %.1f mm from body %d\n",
@@ -888,6 +964,18 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
         }
         ImGui::Spacing();
     }
+    // Operation (Fusion): Join / Cut / New Body. No Intersect, by request.
+    if (!m_surface && m_editingIndex < 0) {
+        const char* items[] = { materializr::tr("Join"), materializr::tr("Cut"),
+                                materializr::tr("New Body") };
+        const int cur = m_mode == ExtrudeMode::Union ? 0
+                      : m_mode == ExtrudeMode::Subtract ? 1 : 2;
+        const int next = touchui::segmented("extOp", items, 3, cur);
+        if (next != cur)
+            setModeManual(ctx, next == 0 ? ExtrudeMode::Union
+                              : next == 1 ? ExtrudeMode::Subtract
+                                          : ExtrudeMode::NewBody);
+    }
     if (imTouch) {
         // im-touch: the WHOLE panel is this one tappable value well - no
         // header, hint or steppers (Steve: the full "distance dialog" kept
@@ -1001,7 +1089,11 @@ void ExtrudeController::onCleanup() {
     if (!m_restarting) {
         m_picks.clear();
         m_picking = false;
+        m_modeAuto = false;
+        m_enteredAsCut = false;
     }
+    m_autoSign = 0;
+    m_joinHost = -1;
     m_tapArmed = false;
 }
 
