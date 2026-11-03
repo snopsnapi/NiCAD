@@ -26,6 +26,15 @@ public:
     // is later edited (constraint value change → cascade). -1 means "not from
     // a sketch" (e.g., a face-driven extrude) - those won't cascade.
     void setSketchSource(int sketchId) { m_sketchId = sketchId; }
+    // Fork (Edit Feature's Profiles field): swap in a newly picked profile.
+    // The recorded regions and recovered footprint belong to the old one, so
+    // they are dropped; the next execute records the new regions.
+    void replaceProfile(const TopoDS_Shape& profile, int sketchId) {
+        m_profile = profile;
+        m_sketchId = sketchId;
+        m_regionPts.clear();
+        m_recoveredProfile.Nullify();
+    }
 
     // Getters
     double getDistance() const { return m_distance; }

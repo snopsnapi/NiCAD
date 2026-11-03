@@ -85,7 +85,7 @@ private:
 
     // GL resources
     unsigned int m_program = 0;
-    int m_locMVP = -1;
+    int m_locMVP = -1;   // (m_locAlpha below)
     int m_locColor = -1;
 
     // Meshes: arrows (translate), rings (rotate), cubes (scale)
@@ -100,6 +100,19 @@ private:
 
     unsigned int m_planeVao = 0, m_planeVbo = 0;
     int m_planeVertCount = 0;
+
+    // Combined Move: quarter-arc rotation handles (Fusion style) instead of
+    // the 270-degree rings.
+    unsigned int m_arcVao = 0, m_arcVbo = 0;
+    int m_arcVertCount = 0;
+    int m_locAlpha = -1;
+    // Viewport height in input units (from handleInput), so the drawn and
+    // the picked gizmo share one screen size.
+    float m_viewH = 0.0f;
+    // World units per local gizmo unit at m_position: a constant size in dp
+    // on screen, whatever the zoom.
+    float handleScale(const glm::mat4& view, const glm::mat4& proj, float vpH) const;
+    void buildArcMesh();
 
     void buildArrowMesh();
     void buildRingMesh();

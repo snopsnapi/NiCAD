@@ -2,6 +2,7 @@
 #include "Gizmo.h"
 #include "Camera.h"
 #include "../touch_mode.h"
+#include "../ui_scale.h"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -27,9 +28,10 @@ void main() {
 static const char* s_fragSource = R"(
 #version 330 core
 uniform vec3 u_color;
+uniform float u_alpha;
 out vec4 fragColor;
 void main() {
-    fragColor = vec4(u_color, 1.0);
+    fragColor = vec4(u_color, u_alpha);
 }
 )";
 
@@ -46,8 +48,33 @@ static constexpr int kRingSegments = 48;
 static constexpr float kPickThreshold = 0.04f;
 // Combined Move: plane squares between two axes, [kPlaneLo, kPlaneHi] along
 // each (inside the rotation rings, clear of the arrow shafts).
-static constexpr float kPlaneLo = 0.22f;
-static constexpr float kPlaneHi = 0.42f;
+static constexpr float kPlaneLo = 0.18f;
+static constexpr float kPlaneHi = 0.36f;
+// Combined Move: rotation arcs - a quarter circle between the two other
+// axes, trimmed clear of the arrow shafts at both ends.
+static constexpr float kArcRadius = 0.62f;
+static constexpr float kArcTube = 0.028f;
+static constexpr float kArcFrom = 0.20f;   // radians
+static constexpr float kArcTo = 1.37f;
+// On-screen size of one local gizmo unit (the arrow is 1.2 units long).
+static float gizmoUnitDp() { return materializr::touchMode() ? 58.0f : 48.0f; }
+// The combined gizmo's colours (Fusion's axis hues) and the grabbed handle's.
+static const glm::vec3 kAxisCol[3] = {{0.88f, 0.22f, 0.22f}, {0.30f, 0.76f, 0.22f},
+                                      {0.22f, 0.46f, 0.96f}};
+static const glm::vec3 kActiveCol{1.0f, 0.80f, 0.10f};
+// Arc frame for the rotation about `axis`: columns u, v, n with u x v = n
+// (the same u / v ringAngle measures the angle in).
+static glm::mat4 arcFrame(GizmoAxis axis) {
+    glm::vec3 u, v, n;
+    if (axis == GizmoAxis::X)      { n = {1,0,0}; u = {0,1,0}; v = {0,0,1}; }
+    else if (axis == GizmoAxis::Y) { n = {0,1,0}; u = {0,0,1}; v = {1,0,0}; }
+    else                           { n = {0,0,1}; u = {1,0,0}; v = {0,1,0}; }
+    glm::mat4 m(1.0f);
+    m[0] = glm::vec4(u, 0.0f);
+    m[1] = glm::vec4(v, 0.0f);
+    m[2] = glm::vec4(n, 0.0f);
+    return m;
+}
 
 // Local XY quad -> world plane: XY (normal Z), YZ (normal X), XZ (normal Y).
 static glm::mat4 planeRotation(GizmoAxis a) {
@@ -88,6 +115,8 @@ Gizmo::~Gizmo() {
     if (m_cubeVbo) glDeleteBuffers(1, &m_cubeVbo);
     if (m_planeVao) glDeleteVertexArrays(1, &m_planeVao);
     if (m_planeVbo) glDeleteBuffers(1, &m_planeVbo);
+    if (m_arcVao) glDeleteVertexArrays(1, &m_arcVao);
+    if (m_arcVbo) glDeleteBuffers(1, &m_arcVbo);
 }
 
 bool Gizmo::initialize() {
@@ -114,6 +143,7 @@ bool Gizmo::initialize() {
     }
     m_locMVP = glGetUniformLocation(m_program, "u_mvp");
     m_locColor = glGetUniformLocation(m_program, "u_color");
+    m_locAlpha = glGetUniformLocation(m_program, "u_alpha");
 
     glGenVertexArrays(1, &m_arrowVao);
     glGenBuffers(1, &m_arrowVbo);
@@ -128,6 +158,7 @@ bool Gizmo::initialize() {
     buildRingMesh();
     buildCubeMesh();
     buildPlaneMesh();
+    buildArcMesh();
     return true;
 }
 
@@ -269,6 +300,41 @@ void Gizmo::buildPlaneMesh() {
     uploadMesh(m_planeVao, m_planeVbo, verts, m_planeVertCount);
 }
 
+void Gizmo::buildArcMesh() {
+    // Quarter torus arc in the local XY plane (kArcFrom..kArcTo); arcFrame()
+    // turns it into the arc about each axis.
+    std::vector<float> verts;
+    auto addTri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+        verts.insert(verts.end(), {a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z});
+    };
+    const int segs = 24, tubeSegs = 8;
+    auto pt = [&](float theta, float phi) {
+        const float r = kArcRadius + kArcTube * std::cos(phi);
+        return glm::vec3(r * std::cos(theta), r * std::sin(theta), kArcTube * std::sin(phi));
+    };
+    for (int i = 0; i < segs; ++i) {
+        const float t1 = kArcFrom + (kArcTo - kArcFrom) * i / segs;
+        const float t2 = kArcFrom + (kArcTo - kArcFrom) * (i + 1) / segs;
+        for (int j = 0; j < tubeSegs; ++j) {
+            const float p1 = 2.0f * (float)M_PI * j / tubeSegs;
+            const float p2 = 2.0f * (float)M_PI * (j + 1) / tubeSegs;
+            addTri(pt(t1, p1), pt(t2, p1), pt(t2, p2));
+            addTri(pt(t1, p1), pt(t2, p2), pt(t1, p2));
+        }
+    }
+    uploadMesh(m_arcVao, m_arcVbo, verts, m_arcVertCount);
+}
+
+float Gizmo::handleScale(const glm::mat4& view, const glm::mat4& proj, float vpH) const {
+    if (vpH <= 1.0f) vpH = 1.0f;
+    const float frac = gizmoUnitDp() * materializr::uiScale() / vpH;
+    // Visible world height at the gizmo: ortho has none of the depth term.
+    const bool ortho = std::abs(proj[2][3]) < 1e-6f;
+    const float depth = std::max(1e-3f, -(view * glm::vec4(m_position, 1.0f)).z);
+    const float visH = (ortho ? 2.0f : 2.0f * depth) / std::max(1e-6f, proj[1][1]);
+    return std::max(1e-4f, frac * visH);
+}
+
 void Gizmo::setMode(GizmoMode mode) { m_mode = mode; m_combined = false; }
 void Gizmo::setCombinedMove() { m_mode = GizmoMode::Translate; m_combined = true; }
 GizmoMode Gizmo::getMode() const { return m_mode; }
@@ -323,6 +389,7 @@ void Gizmo::renderArrowAlong(const glm::mat4& view, const glm::mat4& projection,
     glUseProgram(m_program);
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(mvp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(color));
+    glUniform1f(m_locAlpha, 1.0f);
     glBindVertexArray(m_arrowVao);
     glDrawArrays(GL_TRIANGLES, 0, m_arrowVertCount);
     glBindVertexArray(0);
@@ -357,6 +424,7 @@ void Gizmo::renderRingAbout(const glm::mat4& view, const glm::mat4& projection,
     glUseProgram(m_program);
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(mvp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(color));
+    glUniform1f(m_locAlpha, 1.0f);
     glBindVertexArray(m_ringVao);
     glDrawArrays(GL_TRIANGLES, 0, m_ringVertCount);
     glBindVertexArray(0);
@@ -389,6 +457,7 @@ void Gizmo::renderCubeAlong(const glm::mat4& view, const glm::mat4& projection,
     glUseProgram(m_program);
     glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(mvp));
     glUniform3fv(m_locColor, 1, glm::value_ptr(color));
+    glUniform1f(m_locAlpha, 1.0f);
     glBindVertexArray(m_cubeVao);
     glDrawArrays(GL_TRIANGLES, 0, m_cubeVertCount);
     glBindVertexArray(0);
@@ -397,25 +466,23 @@ void Gizmo::renderCubeAlong(const glm::mat4& view, const glm::mat4& projection,
 void Gizmo::render(const glm::mat4& view, const glm::mat4& projection) {
     if (!m_visible || !m_program) return;
 
-    glm::vec3 camPos = glm::vec3(glm::inverse(view)[3]);
-    float dist = glm::length(camPos - m_position);
-    float scale = dist * gizmoScale();
-    if (scale < 0.01f) scale = 0.01f;
-
-    glm::mat4 vp = projection * view;
+    float vpH = m_viewH;
+    if (vpH <= 0.0f) {
+        GLint vpr[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, vpr);
+        vpH = static_cast<float>(vpr[3]);
+    }
+    const float scale = handleScale(view, projection, vpH);
+    const glm::mat4 vp = projection * view;
 
     // Rotation matrices to align +Z mesh with each axis
-    glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0));
-    glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1,0,0));
-    glm::mat4 rotZ = glm::mat4(1.0f);
-
-    // Ring rotations: ring is in XY plane, rotate to align with each axis's rotation plane
-    // X rotation ring: rotate ring so it sits in YZ plane
-    glm::mat4 ringRotX = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0));
-    // Y rotation ring: rotate ring so it sits in XZ plane
-    glm::mat4 ringRotY = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1,0,0));
-    // Z rotation ring: ring already in XY plane
-    glm::mat4 ringRotZ = glm::mat4(1.0f);
+    const glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0));
+    const glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1,0,0));
+    const glm::mat4 rotZ = glm::mat4(1.0f);
+    // Rotate-only mode's rings: ring in XY, turned into each axis's plane.
+    const glm::mat4 ringRotX = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0));
+    const glm::mat4 ringRotY = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1,0,0));
+    const glm::mat4 ringRotZ = glm::mat4(1.0f);
 
     struct DrawInfo {
         GizmoAxis axis;
@@ -424,51 +491,64 @@ void Gizmo::render(const glm::mat4& view, const glm::mat4& projection) {
         glm::mat4 rotation;
         unsigned int vao;
         int vertCount;
+        float alpha;
     };
-
-    DrawInfo draws[] = {
-        // Translate arrows
-        {GizmoAxis::X, GizmoMode::Translate, {0.9f,0.2f,0.2f}, rotX, m_arrowVao, m_arrowVertCount},
-        {GizmoAxis::Y, GizmoMode::Translate, {0.2f,0.9f,0.2f}, rotY, m_arrowVao, m_arrowVertCount},
-        {GizmoAxis::Z, GizmoMode::Translate, {0.3f,0.4f,0.95f}, rotZ, m_arrowVao, m_arrowVertCount},
-        // Rotate rings
-        {GizmoAxis::X, GizmoMode::Rotate, {0.9f,0.2f,0.2f}, ringRotX, m_ringVao, m_ringVertCount},
-        {GizmoAxis::Y, GizmoMode::Rotate, {0.2f,0.9f,0.2f}, ringRotY, m_ringVao, m_ringVertCount},
-        {GizmoAxis::Z, GizmoMode::Rotate, {0.3f,0.4f,0.95f}, ringRotZ, m_ringVao, m_ringVertCount},
-        // Scale cubes
-        {GizmoAxis::X, GizmoMode::Scale, {0.9f,0.2f,0.2f}, rotX, m_cubeVao, m_cubeVertCount},
-        {GizmoAxis::Y, GizmoMode::Scale, {0.2f,0.9f,0.2f}, rotY, m_cubeVao, m_cubeVertCount},
-        {GizmoAxis::Z, GizmoMode::Scale, {0.3f,0.4f,0.95f}, rotZ, m_cubeVao, m_cubeVertCount},
-        // Plane squares (combined Move only), coloured by their normal axis
-        {GizmoAxis::YZ, GizmoMode::Translate, {0.75f,0.2f,0.2f}, planeRotation(GizmoAxis::YZ), m_planeVao, m_planeVertCount},
-        {GizmoAxis::XZ, GizmoMode::Translate, {0.2f,0.75f,0.2f}, planeRotation(GizmoAxis::XZ), m_planeVao, m_planeVertCount},
-        {GizmoAxis::XY, GizmoMode::Translate, {0.25f,0.35f,0.8f}, planeRotation(GizmoAxis::XY), m_planeVao, m_planeVertCount},
-    };
+    std::vector<DrawInfo> draws;
+    const GizmoAxis ax[3] = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
+    const glm::mat4 arrowRot[3] = {rotX, rotY, rotZ};
+    const glm::mat4 ringRot[3] = {ringRotX, ringRotY, ringRotZ};
+    if (m_combined) {
+        // Fusion-style Move: translucent plane squares underneath, then the
+        // rotation arcs, then the arrows on top.
+        const GizmoAxis planes[3] = {GizmoAxis::YZ, GizmoAxis::XZ, GizmoAxis::XY};
+        for (int i = 0; i < 3; ++i)
+            draws.push_back({planes[i], GizmoMode::Translate, kAxisCol[i],
+                             planeRotation(planes[i]), m_planeVao, m_planeVertCount, 0.45f});
+        for (int i = 0; i < 3; ++i)
+            draws.push_back({ax[i], GizmoMode::Rotate, kAxisCol[i], arcFrame(ax[i]),
+                             m_arcVao, m_arcVertCount, 1.0f});
+        for (int i = 0; i < 3; ++i)
+            draws.push_back({ax[i], GizmoMode::Translate, kAxisCol[i], arrowRot[i],
+                             m_arrowVao, m_arrowVertCount, 1.0f});
+    } else {
+        for (int i = 0; i < 3; ++i) {
+            if (m_mode == GizmoMode::Translate)
+                draws.push_back({ax[i], m_mode, kAxisCol[i], arrowRot[i], m_arrowVao, m_arrowVertCount, 1.0f});
+            else if (m_mode == GizmoMode::Rotate)
+                draws.push_back({ax[i], m_mode, kAxisCol[i], ringRot[i], m_ringVao, m_ringVertCount, 1.0f});
+            else
+                draws.push_back({ax[i], m_mode, kAxisCol[i], arrowRot[i], m_cubeVao, m_cubeVertCount, 1.0f});
+        }
+    }
 
     glDisable(GL_DEPTH_TEST);
+    const GLboolean blendWas = glIsEnabled(GL_BLEND);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(m_program);
 
     for (const auto& d : draws) {
-        // Only the active mode's handles - except the combined Move gizmo,
-        // which shows arrows, rings and plane squares together (no cubes).
-        if (m_combined) {
-            if (d.mode == GizmoMode::Scale) continue;
-        } else if (d.mode != m_mode || isPlaneAxis(d.axis)) {
-            continue;
-        }
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), m_position)
-                        * glm::scale(glm::mat4(1.0f), glm::vec3(scale))
-                        * d.rotation;
-        glm::mat4 mvp = vp * model;
+        const glm::mat4 model = glm::translate(glm::mat4(1.0f), m_position)
+                              * glm::scale(glm::mat4(1.0f), glm::vec3(scale))
+                              * d.rotation;
+        const glm::mat4 mvp = vp * model;
 
         glm::vec3 color = d.baseColor;
-        if (m_draggingAxis == d.axis && m_draggingMode == d.mode)
-            color = glm::clamp(color * 1.8f, glm::vec3(0), glm::vec3(1));
-        else if (m_hoveredAxis == d.axis && m_hoveredMode == d.mode)
-            color = glm::clamp(color * 1.4f, glm::vec3(0), glm::vec3(1));
+        float alpha = d.alpha;
+        const bool grabbed = m_draggingAxis == d.axis && m_draggingMode == d.mode;
+        const bool hovered = m_hoveredAxis == d.axis && m_hoveredMode == d.mode &&
+                             m_draggingAxis == GizmoAxis::None;
+        if (grabbed) {
+            color = kActiveCol;
+            alpha = std::max(alpha, 0.75f);
+        } else if (hovered) {
+            color = glm::mix(color, glm::vec3(1.0f), 0.35f);
+            alpha = std::max(alpha, 0.65f);
+        }
 
         glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(mvp));
         glUniform3fv(m_locColor, 1, glm::value_ptr(color));
+        glUniform1f(m_locAlpha, alpha);
 
         glBindVertexArray(d.vao);
         glDrawArrays(GL_TRIANGLES, 0, d.vertCount);
@@ -476,100 +556,78 @@ void Gizmo::render(const glm::mat4& view, const glm::mat4& projection) {
 
     glBindVertexArray(0);
     glUseProgram(0);
+    if (!blendWas) glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
 }
 
 Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
                                       const Camera& camera) {
+    // Distances in viewport pixels against a catch radius in dp (a fingertip
+    // needs more slack than a cursor).
     PickResult best;
     best.axis = GizmoAxis::None;
     best.mode = GizmoMode::Translate;
-    // Widen the catch radius on touch - a fingertip can't land on a thin arrow
-    // line as precisely as a cursor. (The widget itself is also larger on touch
-    // via gizmoScale(), so this is the matching slack around it.)
-    best.dist = kPickThreshold * (materializr::touchMode() ? 2.5f : 1.0f);
+    best.dist = (materializr::touchMode() ? 16.0f : 7.0f) * materializr::uiScale();
 
-    glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
-    glm::vec3 camPos = camera.getPosition();
-    float dist = glm::length(camPos - m_position);
-    float scale = dist * gizmoScale();
+    const glm::mat4 view = camera.getViewMatrix();
+    const glm::mat4 proj = camera.getProjectionMatrix();
+    const glm::mat4 vp = proj * view;
+    const float scale = handleScale(view, proj, vpH);
+    auto toPx = [&](const glm::vec3& w) {
+        const glm::vec2 n = worldToNDC(w, vp);
+        return glm::vec2((n.x + 1.0f) * 0.5f * vpW, (1.0f - n.y) * 0.5f * vpH);
+    };
+    const glm::vec2 mouse(mx, my);
+    const glm::vec2 originPx = toPx(m_position);
 
-    float ndcX = (mx / vpW) * 2.0f - 1.0f;
-    float ndcY = 1.0f - (my / vpH) * 2.0f;
-    glm::vec2 mouse(ndcX, ndcY);
-
-    glm::vec2 originNDC = worldToNDC(m_position, vp);
-
-    glm::vec3 axisDirs[3] = {{1,0,0}, {0,1,0}, {0,0,1}};
-    GizmoAxis axisIds[3] = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
+    const glm::vec3 axisDirs[3] = {{1,0,0}, {0,1,0}, {0,0,1}};
+    const GizmoAxis axisIds[3] = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
+    auto consider = [&](float d, GizmoAxis a, GizmoMode m) {
+        if (d < best.dist) { best.dist = d; best.axis = a; best.mode = m; }
+    };
 
     // Only the active mode's handles are pickable - otherwise the long translate
     // arrow lines would steal clicks meant for the scale cubes / rotate rings.
-    // Test translate arrows (line from origin to tip)
     const bool pickTranslate = m_combined || m_mode == GizmoMode::Translate;
     const bool pickRotate = m_combined || m_mode == GizmoMode::Rotate;
     if (pickTranslate)
-    for (int i = 0; i < 3; i++) {
-        glm::vec3 tip = m_position + axisDirs[i] * scale * (kAxisLength + kConeHeight);
-        glm::vec2 tipNDC = worldToNDC(tip, vp);
-        float d = screenDistToSegment(mouse, originNDC, tipNDC);
-        if (d < best.dist) {
-            best.dist = d;
-            best.axis = axisIds[i];
-            best.mode = GizmoMode::Translate;
+        for (int i = 0; i < 3; i++) {
+            // Combined: the shaft starts past the plane squares so a touch
+            // there reaches them.
+            const float from = m_combined ? kPlaneHi : 0.0f;
+            const glm::vec2 a = m_combined ? toPx(m_position + axisDirs[i] * scale * from) : originPx;
+            const glm::vec2 b = toPx(m_position + axisDirs[i] * scale * (kAxisLength + kConeHeight));
+            consider(screenDistToSegment(mouse, a, b), axisIds[i], GizmoMode::Translate);
         }
-    }
 
-    // Test scale cubes (small region around cube endpoint)
     if (!m_combined && m_mode == GizmoMode::Scale)
-    for (int i = 0; i < 3; i++) {
-        glm::vec3 cubePos = m_position + axisDirs[i] * scale * kCubeOffset;
-        glm::vec2 cubeNDC = worldToNDC(cubePos, vp);
-        float d = glm::length(mouse - cubeNDC);
-        if (d < best.dist) {
-            best.dist = d;
-            best.axis = axisIds[i];
-            best.mode = GizmoMode::Scale;
-        }
-    }
+        for (int i = 0; i < 3; i++)
+            consider(glm::length(mouse - toPx(m_position + axisDirs[i] * scale * kCubeOffset)),
+                     axisIds[i], GizmoMode::Scale);
 
-    // Test rotate rings (sample points along the arc)
-    if (pickRotate) {
-    glm::mat4 ringRots[3] = {
-        glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0)),
-        glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1,0,0)),
-        glm::mat4(1.0f),
-    };
-    for (int i = 0; i < 3; i++) {
-        float arcAngle = 2.0f * (float)M_PI * 0.75f;
-        glm::vec2 prevNDC(0);
-        for (int s = 0; s <= kRingSegments; s++) {
-            float theta = arcAngle * s / kRingSegments;
-            glm::vec3 localPt(kRingRadius * std::cos(theta), kRingRadius * std::sin(theta), 0);
-            glm::vec3 worldPt = m_position + glm::vec3(
-                glm::translate(glm::mat4(1.0f), glm::vec3(0))
-                * glm::scale(glm::mat4(1.0f), glm::vec3(scale))
-                * ringRots[i] * glm::vec4(localPt, 1.0f));
-            // Simpler: transform localPt
-            glm::vec4 transformed = ringRots[i] * glm::vec4(localPt, 1.0f);
-            worldPt = m_position + glm::vec3(transformed) * scale;
-
-            glm::vec2 ptNDC = worldToNDC(worldPt, vp);
-            if (s > 0) {
-                float d = screenDistToSegment(mouse, prevNDC, ptNDC);
-                if (d < best.dist) {
-                    best.dist = d;
-                    best.axis = axisIds[i];
-                    best.mode = GizmoMode::Rotate;
-                }
+    if (pickRotate)
+        for (int i = 0; i < 3; i++) {
+            // Combined: the quarter arc; Rotate-only: the 270-degree ring.
+            const glm::mat4 frame = m_combined ? arcFrame(axisIds[i])
+                : (i == 0 ? glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0,1,0))
+                 : i == 1 ? glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1,0,0))
+                          : glm::mat4(1.0f));
+            const float r = m_combined ? kArcRadius : kRingRadius;
+            const float t0 = m_combined ? kArcFrom : 0.0f;
+            const float t1 = m_combined ? kArcTo : 2.0f * (float)M_PI * 0.75f;
+            const int segs = m_combined ? 16 : kRingSegments;
+            glm::vec2 prev(0.0f);
+            for (int s = 0; s <= segs; s++) {
+                const float theta = t0 + (t1 - t0) * s / segs;
+                const glm::vec4 local(r * std::cos(theta), r * std::sin(theta), 0.0f, 0.0f);
+                const glm::vec2 p = toPx(m_position + glm::vec3(frame * local) * scale);
+                if (s > 0) consider(screenDistToSegment(mouse, prev, p), axisIds[i], GizmoMode::Rotate);
+                prev = p;
             }
-            prevNDC = ptNDC;
         }
-    }
-    } // pickRotate
 
     // Plane squares (combined Move): a touch inside the projected square wins
-    // outright; near its centre counts like any other handle.
+    // outright; near it counts like any other handle.
     if (m_combined) {
         const GizmoAxis planes[3] = {GizmoAxis::XY, GizmoAxis::YZ, GizmoAxis::XZ};
         for (GizmoAxis pa : planes) {
@@ -578,7 +636,7 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
             const glm::vec3 local[4] = {{a, a, 0}, {b, a, 0}, {b, b, 0}, {a, b, 0}};
             glm::vec2 q[4];
             for (int k = 0; k < 4; ++k)
-                q[k] = worldToNDC(m_position + glm::vec3(rot * glm::vec4(local[k], 0.0f)) * scale, vp);
+                q[k] = toPx(m_position + glm::vec3(rot * glm::vec4(local[k], 0.0f)) * scale);
             // Convex quad: inside when every edge sees the point on one side.
             float sgn = 0.0f;
             bool inside = true;
@@ -586,17 +644,17 @@ Gizmo::PickResult Gizmo::pickNearest(float mx, float my, float vpW, float vpH,
                 const glm::vec2 e = q[(k + 1) % 4] - q[k];
                 const glm::vec2 w = mouse - q[k];
                 const float c = e.x * w.y - e.y * w.x;
-                if (std::abs(c) < 1e-12f) continue;
+                if (std::abs(c) < 1e-6f) continue;
                 if (sgn == 0.0f) sgn = c;
                 else if ((c > 0.0f) != (sgn > 0.0f)) { inside = false; break; }
             }
-            const glm::vec2 ctr = (q[0] + q[1] + q[2] + q[3]) * 0.25f;
-            const float d = inside ? 0.0f : glm::length(mouse - ctr);
-            if (d < best.dist) {
-                best.dist = d;
-                best.axis = pa;
-                best.mode = GizmoMode::Translate;
+            float d = 0.0f;
+            if (!inside) {
+                d = 1e30f;
+                for (int k = 0; k < 4; ++k)
+                    d = std::min(d, screenDistToSegment(mouse, q[k], q[(k + 1) % 4]));
             }
+            consider(d, pa, GizmoMode::Translate);
         }
     }
 
@@ -693,6 +751,7 @@ GizmoResult Gizmo::handleInput(float mouseX, float mouseY,
                                 const Camera& camera) {
     GizmoResult result;
     if (!m_visible) return result;
+    m_viewH = vpHeight;
 
     if (mouseJustPressed) {
         auto pick = pickNearest(mouseX, mouseY, vpWidth, vpHeight, camera);

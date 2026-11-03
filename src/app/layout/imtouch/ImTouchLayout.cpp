@@ -677,7 +677,20 @@ void Application::renderImTouchLayout() {
                 return !gone;
             };
 
-            bool any = false;
+            // Fork: the origin (three base planes and axes) as the tree's
+            // first row, its eye showing / hiding it in the viewport.
+            bool any = true;
+            {
+                ImGui::PushID("origin");
+                bool vis = m_showOrigin;
+                auto act = touchui::treeLeaf("origin", MZ_ICON_AXES, materializr::tr("Origin"),
+                                             &vis, /*selected=*/false);
+                if (act.eyeToggled || act.clicked) {
+                    m_showOrigin = !m_showOrigin;
+                    saveAppSettings();
+                }
+                ImGui::PopID();
+            }
             const auto bodyIds   = m_document->getAllBodyIds();
             const auto folderIds = m_document->getAllFolderIds();
             if (!bodyIds.empty() || !folderIds.empty()) {
@@ -1166,23 +1179,6 @@ void Application::renderImTouchLayout() {
     ImGui::PopStyleColor();
 
     renderPendingCommandBar();   // fork: command-first rail
-
-    // Fork: origin show/hide, on the right edge (outside a sketch).
-    if (!m_inSketchMode) {
-        ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, wp.y + ws.y * 0.5f),
-                                ImGuiCond_Always, ImVec2(1.0f, 0.5f));
-        ImGui::SetNextWindowBgAlpha(0.92f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, touchui::panelBg());
-        if (ImGui::Begin("##LiteOrigin", nullptr, kFloat)) {
-            if (touchui::railButton("originToggle", MZ_ICON_AXES, materializr::tr("Origin"),
-                                    m_showOrigin, 64.0f * s)) {
-                m_showOrigin = !m_showOrigin;
-                saveAppSettings();
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleColor();
-    }
 
     // ── Bottom-right corner: in a sketch, the commit actions - an accent
     //    ✓ Finish FAB with a smaller ✗ Discard beside it (gap so a Finish tap

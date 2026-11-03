@@ -158,7 +158,25 @@ private:
     std::vector<Pick> m_picks;
     bool m_picking = false;
     bool m_restarting = false;   // onCleanup keeps the picks across a restart
+    // Edit mode: the op's profile and sketch when the edit began, put back on
+    // cancel when the Profiles field changed them.
+    TopoDS_Shape m_origProfile;
+    int m_origSketchId = -1;
+    bool m_profileEdited = false;
+    // Edit mode: the step's sketch, shown while picking because it was hidden.
+    int m_shownSketch = -1;
     int profileCount() const;
+    // The field was cleared and nothing picked since: no preview, no commit.
+    bool profileCleared() const { return m_picking && m_picks.empty(); }
+    // Seed m_picks from m_profile (sketch regions matched by area and centre,
+    // other faces as face picks) so a tap adds to what is there.
+    void seedPicksFromProfile(const IopContext& ctx);
+    // m_picks -> one face or a compound; sketchId of the regions (or -1).
+    bool buildPickedProfile(const IopContext& ctx, TopoDS_Shape& out, int& sketchId) const;
+    // Arrow origin and normal from m_profile (before the sweep sign).
+    void computeFrame(const IopContext& ctx);
+    // Edit mode: write the picked profile into the op and replay.
+    void applyEditProfile(const IopContext& ctx);
     // Tap at the viewport ray: the nearest sketch region or planar body face
     // (not the preview body). False on a miss.
     bool pickAt(const IopViewport& vp, const IopContext& ctx, Pick& out) const;

@@ -24,6 +24,8 @@
 #include <imgui.h>
 #include <BRep_Tool.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepGProp_Face.hxx>
 #include <Bnd_Box.hxx>
 #include <Geom_Plane.hxx>
@@ -163,6 +165,9 @@ bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex
     m_targetBody = op->getTargetBody();
     m_sketchId = op->getSketchId();
     m_origOpDistance = op->getDistance();
+    m_origProfile = op->getProfile();
+    m_origSketchId = op->getSketchId();
+    m_profileEdited = false;
     m_editingIndex = historyIndex;
     m_surface = dynamic_cast<const SurfaceExtrudeOp*>(op) != nullptr;
     if (!begin(ctx)) {
@@ -178,11 +183,7 @@ void ExtrudeController::writeEditDistance(const IopContext& ctx, double d) const
     if (op) op->setDistance(d);
 }
 
-int ExtrudeController::onBegin(const IopContext& ctx) {
-    m_distance = m_dragRaw = m_dragAppliedDist = 5.0f;
-    materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
-    m_inputFocus = true;
-
+void ExtrudeController::computeFrame(const IopContext& ctx) {
     // Face normal and centre. A compound profile (multi-region extrude -
     // several letters at once) uses its first face: all regions of one sketch
     // are coplanar, so any face gives the right normal.
@@ -216,6 +217,14 @@ int ExtrudeController::onBegin(const IopContext& ctx) {
             m_origin = glm::vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5);
         }
     }
+}
+
+int ExtrudeController::onBegin(const IopContext& ctx) {
+    m_distance = m_dragRaw = m_dragAppliedDist = 5.0f;
+    materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
+    m_inputFocus = true;
+
+    computeFrame(ctx);
     // Point the on-screen arrow INTO the material for a Subtract, so dragging
     // toward it deepens the cut. A face sketch gets that for free - its normal
     // points OUT of the host body, so the cut runs the other way. A sketch on a
@@ -304,7 +313,11 @@ bool ExtrudeController::syncLiveOp(Operation& op) {
 // Refusing leaves the op OPEN so the distance can be pushed further or reversed.
 void ExtrudeController::update(const IopContext& ctx) {
     if (!active()) return;
-    if (m_editingIndex < 0) { InteractiveOpController::update(ctx); return; }
+    if (m_editingIndex < 0) {
+        if (profileCleared()) return;   // nothing picked: no preview
+        InteractiveOpController::update(ctx);
+        return;
+    }
     if (std::abs(m_distance) < 0.01f) return;   // no zero-length preview mid-drag
     materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
     writeEditDistance(ctx, opDistance());
@@ -312,6 +325,10 @@ void ExtrudeController::update(const IopContext& ctx) {
 }
 
 void ExtrudeController::finishEdit(const IopContext& ctx) {
+    if (m_shownSketch >= 0) {
+        ctx.doc.setSketchVisible(m_shownSketch, false);
+        m_shownSketch = -1;
+    }
     m_editPreview.clear();
     ctx.selection.clear();
     if (ctx.markMeshesDirty) ctx.markMeshesDirty();
@@ -325,13 +342,17 @@ void ExtrudeController::cancel(const IopContext& ctx) {
         // The preview mutated the real op: put its distance back and replay
         // (replay falls back to the pre-edit snapshot if even that fails).
         writeEditDistance(ctx, m_origOpDistance);
+        if (m_profileEdited)
+            if (auto* op = dynamic_cast<ExtrudeOp*>(
+                    const_cast<Operation*>(ctx.history.getStep(m_editingIndex))))
+                op->replaceProfile(m_origProfile, m_origSketchId);
         m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history);
     }
     finishEdit(ctx);
 }
 
 void ExtrudeController::commit(const IopContext& ctx) {
-    if (m_editingIndex < 0 && m_picking && m_picks.empty() && active()) {
+    if (profileCleared() && active()) {
         // The Profiles field was cleared and nothing re-picked yet.
         if (ctx.toast) ctx.toast(materializr::tr("Pick a profile to extrude."));
         return;
@@ -566,7 +587,7 @@ bool ExtrudeController::pickAt(const IopViewport& vp, const IopContext& ctx, Pic
     for (int sid : ctx.doc.getAllSketchIds()) {
         if (!ctx.doc.isSketchVisible(sid)) continue;
         auto sk = ctx.doc.getSketch(sid);
-        if (!sk || !sk->regionsCached()) continue;
+        if (!sk || (!sk->regionsCached() && sid != m_shownSketch)) continue;
         const auto regions = sk->buildRegions();
         for (size_t i = 0; i < regions.size(); ++i) {
             gp_Pnt hit;
@@ -581,9 +602,18 @@ bool ExtrudeController::pickAt(const IopViewport& vp, const IopContext& ctx, Pic
         }
     }
     // Planar faces of visible bodies, never the preview's own tool volume.
-    const int preview = previewBodyId();
+    // Edit mode: not the edited step's own result either (its created body,
+    // or the body it cuts / joins) - that would feed the step its own output.
+    int preview = previewBodyId(), ownTarget = -1;
+    if (m_editingIndex >= 0) {
+        if (const auto* op = dynamic_cast<const ExtrudeOp*>(ctx.history.getStep(m_editingIndex))) {
+            preview = op->createdBodyId();
+            ownTarget = op->getTargetBody();
+        }
+    }
     for (int id : ctx.doc.getAllBodyIds()) {
-        if (id == preview || !ctx.doc.isBodyVisible(id) || ctx.doc.isBodyMesh(id)) continue;
+        if (id == preview || id == ownTarget || !ctx.doc.isBodyVisible(id) ||
+            ctx.doc.isBodyMesh(id)) continue;
         TopoDS_Shape body;
         try { body = ctx.doc.getBody(id); } catch (...) { continue; }
         gp_Pnt hit;
@@ -617,12 +647,51 @@ void ExtrudeController::togglePick(const IopContext& ctx, const Pick& p) {
                 if (q.sketchId >= 0 && q.sketchId != p.sketchId) { m_picks.clear(); break; }
         m_picks.push_back(p);
     }
-    if (!m_picks.empty()) restartFromPicks(ctx);
+    if (m_editingIndex >= 0) { applyEditProfile(ctx); return; }
+    if (m_picks.empty()) {
+        // The last pick went: same as clearing the field.
+        m_picking = true;
+        retractLivePreview(ctx);
+        return;
+    }
+    restartFromPicks(ctx);
 }
 
-bool ExtrudeController::restartFromPicks(const IopContext& ctx) {
+void ExtrudeController::seedPicksFromProfile(const IopContext& ctx) {
+    m_picks.clear();
+    auto props = [](const TopoDS_Shape& f, double& area, gp_Pnt& c) {
+        GProp_GProps g;
+        BRepGProp::SurfaceProperties(f, g);
+        area = g.Mass();
+        c = area > 1e-12 ? g.CentreOfMass() : gp_Pnt();
+    };
+    std::vector<Sketch::Region> regions;
+    std::shared_ptr<Sketch> sk = m_sketchId >= 0 ? ctx.doc.getSketch(m_sketchId) : nullptr;
+    if (sk) regions = sk->buildRegions();
+    for (TopExp_Explorer ex(m_profile, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face f = TopoDS::Face(ex.Current());
+        double a = 0.0;
+        gp_Pnt c;
+        props(f, a, c);
+        int match = -1;
+        for (size_t i = 0; i < regions.size() && match < 0; ++i) {
+            if (regions[i].face.IsNull()) continue;
+            double ra = 0.0;
+            gp_Pnt rc;
+            props(regions[i].face, ra, rc);
+            const double tol = 1e-3 * std::max(1.0, std::sqrt(std::max(a, 0.0)));
+            if (std::abs(ra - a) <= 1e-3 * std::max(1.0, a) && rc.Distance(c) <= tol)
+                match = static_cast<int>(i);
+        }
+        if (match >= 0) m_picks.push_back(Pick{m_sketchId, match, TopoDS_Face()});
+        else            m_picks.push_back(Pick{-1, -1, f});
+    }
+}
+
+bool ExtrudeController::buildPickedProfile(const IopContext& ctx, TopoDS_Shape& out,
+                                           int& sketchId) const {
     std::vector<TopoDS_Face> faces;
-    int sketchId = -1;
+    sketchId = -1;
     for (const Pick& p : m_picks) {
         if (!p.face.IsNull()) { faces.push_back(p.face); continue; }
         auto sk = ctx.doc.getSketch(p.sketchId);
@@ -635,16 +704,38 @@ bool ExtrudeController::restartFromPicks(const IopContext& ctx) {
         }
     }
     if (faces.empty()) return false;
-    TopoDS_Shape profile;
     if (faces.size() == 1) {
-        profile = faces.front();
+        out = faces.front();
     } else {
         BRep_Builder b;
         TopoDS_Compound comp;
         b.MakeCompound(comp);
         for (const TopoDS_Face& f : faces) b.Add(comp, f);
-        profile = comp;
+        out = comp;
     }
+    return true;
+}
+
+void ExtrudeController::applyEditProfile(const IopContext& ctx) {
+    if (m_picks.empty()) return;   // cleared: keep the last preview, commit refuses
+    TopoDS_Shape profile;
+    int sketchId = -1;
+    if (!buildPickedProfile(ctx, profile, sketchId)) return;
+    auto* op = dynamic_cast<ExtrudeOp*>(const_cast<Operation*>(ctx.history.getStep(m_editingIndex)));
+    if (!op) return;
+    op->replaceProfile(profile, sketchId);
+    m_profile = profile;
+    m_sketchId = sketchId;
+    m_profileEdited = true;
+    computeFrame(ctx);
+    m_normal *= static_cast<float>(m_sweepSign);
+    update(ctx);
+}
+
+bool ExtrudeController::restartFromPicks(const IopContext& ctx) {
+    TopoDS_Shape profile;
+    int sketchId = -1;
+    if (!buildPickedProfile(ctx, profile, sketchId)) return false;
     // Keep everything the user set: distance, mode, target, the picks.
     const float dist = m_distance;
     const ExtrudeMode mode = m_mode;
@@ -717,23 +808,41 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
 
     bool doCommit = false, doCancel = false;
     // Profiles selection field (Fusion's "Profiles: 1 selected  x").
-    if (!m_surface && m_editingIndex < 0) {
+    if (!m_surface) {
         const float fh = 40.0f * s;
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(materializr::tr("Profiles"));
         ImGui::SameLine();
         char lbl[48];
         std::snprintf(lbl, sizeof(lbl), materializr::tr("%d selected"), profileCount());
-        if (m_picking) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        // The colour push and pop key off one value: the button below flips
+        // m_picking, and popping on the new value unbalanced ImGui's stack.
+        const bool armed = m_picking;
+        if (armed) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         const float clearW = fh;
         const float fieldW = std::max(80.0f * s, ImGui::GetContentRegionAvail().x - clearW -
                                                      ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button(lbl, ImVec2(fieldW, fh))) m_picking = !m_picking;
-        if (m_picking) ImGui::PopStyleColor();
+        bool toggleField = ImGui::Button(lbl, ImVec2(fieldW, fh));
+        if (armed) ImGui::PopStyleColor();
         ImGui::SameLine();
-        if (ImGui::Button("x##clearProfiles", ImVec2(clearW, fh))) {
+        bool clearField = ImGui::Button("x##clearProfiles", ImVec2(clearW, fh));
+        if (toggleField) {
+            if (!m_picking && m_picks.empty()) seedPicksFromProfile(ctx);
+            // Edit mode: the step's sketch is usually hidden after the
+            // extrude; show it while its regions are being picked.
+            if (m_editingIndex >= 0 && m_origSketchId >= 0 && m_shownSketch < 0 &&
+                !ctx.doc.isSketchVisible(m_origSketchId)) {
+                ctx.doc.setSketchVisible(m_origSketchId, true);
+                m_shownSketch = m_origSketchId;
+            }
+            m_picking = !m_picking || m_picks.empty();
+        }
+        if (clearField) {
             m_picks.clear();
             m_picking = true;
+            // Create mode: the preview goes with the profile. Edit mode keeps
+            // showing the step until something is picked.
+            if (m_editingIndex < 0) retractLivePreview(ctx);
         }
         ImGui::Spacing();
     }
@@ -844,6 +953,9 @@ void ExtrudeController::onCleanup() {
     m_origOpDistance = 0.0;
     m_editPreview.clear();
     m_surface = false;
+    m_origProfile.Nullify();
+    m_origSketchId = -1;
+    m_profileEdited = false;
     if (!m_restarting) {
         m_picks.clear();
         m_picking = false;

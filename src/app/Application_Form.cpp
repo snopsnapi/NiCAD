@@ -109,7 +109,7 @@ bool Application::originVisible() const {
 float Application::originHalfSize() const {
     if (!m_viewport) return 20.0f;
     const glm::vec3 eye = m_viewport->getCamera().getPosition();
-    return std::max(1.0f, glm::length(eye) * 0.12f);
+    return std::max(0.5f, glm::length(eye) * 0.05f);
 }
 
 bool Application::pickOriginPlane(float x, float y, float vpW, float vpH, int& which,
