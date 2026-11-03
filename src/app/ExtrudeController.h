@@ -51,7 +51,7 @@ public:
     // in the viewport (not on the arrow) adds or removes a sketch region or a
     // planar body face, rebuilding the profile and the preview. setPicks is
     // what the starting selection was (Application, before beginExtrude).
-    struct Pick { int sketchId = -1; int region = -1; TopoDS_Face face; };
+    struct Pick { int sketchId = -1; int region = -1; TopoDS_Face face; int bodyId = -1; };
     void setInitialPicks(const std::vector<Pick>& picks) { m_picks = picks; }
     bool picking() const { return m_picking; }
 
@@ -105,6 +105,7 @@ protected:
     // stays silent.
     void renderPanel(const IopContext&) override {}
     bool wantsViewportInput() const override { return true; }
+    bool wantsReleaseDuringCameraDrag() const override { return m_picking; }
     void onViewportInput(const IopViewport& vp, const IopContext& ctx) override;
     void onCleanup() override;
 
@@ -175,6 +176,8 @@ private:
     bool buildPickedProfile(const IopContext& ctx, TopoDS_Shape& out, int& sketchId) const;
     // Arrow origin and normal from m_profile (before the sweep sign).
     void computeFrame(const IopContext& ctx);
+    // Show m_picks as the selection (regions / faces highlighted).
+    void syncSelection(const IopContext& ctx) const;
     // Edit mode: write the picked profile into the op and replay.
     void applyEditProfile(const IopContext& ctx);
     // Tap at the viewport ray: the nearest sketch region or planar body face

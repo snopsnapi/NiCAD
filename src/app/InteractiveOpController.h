@@ -219,6 +219,10 @@ public:
     // Application_Viewport doing it for them. Default: no handle, so the five
     // panel-only controllers are unaffected.
     virtual bool wantsViewportInput() const { return false; }
+    // Fork: also deliver the release frame while the camera is dragging, so
+    // a tap that jittered past the orbit threshold can still pick (the
+    // controller judges the travel itself).
+    virtual bool wantsReleaseDuringCameraDrag() const { return false; }
     // One frame of pointer input while this op is active and the camera isn't
     // being dragged. Call setDraggingHandle() when a handle latches so the
     // camera and the picker know to stand off.

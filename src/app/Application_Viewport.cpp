@@ -4894,7 +4894,8 @@ void Application::renderViewport() {
                     if (!c->active() || !c->wantsViewportInput()) continue;
                     // Release still has to reach a latched handle even while
                     // the camera is dragging, or the handle stays stuck down.
-                    if (camDragging && !c->draggingHandle()) continue;
+                    if (camDragging && !c->draggingHandle() &&
+                        !(vp.released && c->wantsReleaseDuringCameraDrag())) continue;
                     c->onViewportInput(vp, iopContext());
                 }
             }

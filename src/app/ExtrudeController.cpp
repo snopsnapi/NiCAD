@@ -133,7 +133,14 @@ bool ExtrudeController::beginExtrude(const IopContext& ctx,
     m_mode = mode;
     m_targetBody = targetBody;
     m_sketchId = sourceSketchId;
-    return begin(ctx);
+    if (!begin(ctx)) return false;
+    // The Profiles field starts armed (Fusion): taps add / remove profiles.
+    if (!m_restarting) {
+        if (m_picks.empty()) seedPicksFromProfile(ctx);
+        m_picking = true;
+        syncSelection(ctx);
+    }
+    return true;
 }
 
 bool ExtrudeController::beginSurfaceExtrude(const IopContext& ctx, int sketchId) {
@@ -174,6 +181,16 @@ bool ExtrudeController::beginExtrudeEdit(const IopContext& ctx, int historyIndex
         m_editingIndex = -1;
         return false;
     }
+    // Profiles field armed from the start, holding the step's profile; the
+    // step's sketch is usually hidden after the extrude - show it meanwhile.
+    if (m_surface) return true;   // curves, no Profiles field
+    seedPicksFromProfile(ctx);
+    m_picking = !m_picks.empty();
+    if (m_origSketchId >= 0 && !ctx.doc.isSketchVisible(m_origSketchId)) {
+        ctx.doc.setSketchVisible(m_origSketchId, true);
+        m_shownSketch = m_origSketchId;
+    }
+    syncSelection(ctx);
     return true;
 }
 
@@ -518,7 +535,10 @@ void ExtrudeController::onViewportInput(const IopViewport& vp,
             m_tapArmed = false;
         if (m_tapArmed && vp.released) {
             m_tapArmed = false;
-            if (!draggingHandle() && !vp.uiCaptured) {
+            // Not gated on vp.uiCaptured: WantCaptureMouse is true over the
+            // whole viewport image (see the note above), which swallowed
+            // every tap. This runs only while the viewport is hovered.
+            if (!draggingHandle()) {
                 Pick p;
                 if (pickAt(vp, ctx, p)) {
                     togglePick(ctx, p);
@@ -625,7 +645,7 @@ bool ExtrudeController::pickAt(const IopViewport& vp, const IopContext& ctx, Pic
         Handle(Geom_Surface) gs = BRep_Tool::Surface(f);
         if (gs.IsNull() || !gs->IsKind(STANDARD_TYPE(Geom_Plane))) continue;
         best = t;
-        out = Pick{-1, -1, f};
+        out = Pick{-1, -1, f, id};
         found = true;
     }
     return found;
@@ -647,6 +667,7 @@ void ExtrudeController::togglePick(const IopContext& ctx, const Pick& p) {
                 if (q.sketchId >= 0 && q.sketchId != p.sketchId) { m_picks.clear(); break; }
         m_picks.push_back(p);
     }
+    syncSelection(ctx);
     if (m_editingIndex >= 0) { applyEditProfile(ctx); return; }
     if (m_picks.empty()) {
         // The last pick went: same as clearing the field.
@@ -655,6 +676,25 @@ void ExtrudeController::togglePick(const IopContext& ctx, const Pick& p) {
         return;
     }
     restartFromPicks(ctx);
+}
+
+void ExtrudeController::syncSelection(const IopContext& ctx) const {
+    ctx.selection.clear();
+    for (const Pick& p : m_picks) {
+        SelectionEntry e;
+        if (p.face.IsNull()) {
+            e.type = SelectionType::SketchRegion;
+            e.sketchId = p.sketchId;
+            e.subShapeIndex = p.region;
+        } else if (p.bodyId >= 0) {
+            e.type = SelectionType::Face;
+            e.bodyId = p.bodyId;
+            e.shape = p.face;
+        } else {
+            continue;
+        }
+        ctx.selection.addToSelection(e);
+    }
 }
 
 void ExtrudeController::seedPicksFromProfile(const IopContext& ctx) {
@@ -752,6 +792,7 @@ bool ExtrudeController::restartFromPicks(const IopContext& ctx) {
     m_distance = m_dragRaw = m_dragAppliedDist = dist;
     materializr::formatLengthDigits(m_inputBuf, sizeof(m_inputBuf), m_distance);
     updateExtrude(ctx, /*applySnap=*/false);
+    syncSelection(ctx);   // the restart's cancel cleared it
     return true;
 }
 
@@ -840,6 +881,7 @@ void ExtrudeController::renderExtrudePanel(const IopContext& ctx) {
         if (clearField) {
             m_picks.clear();
             m_picking = true;
+            ctx.selection.clear();
             // Create mode: the preview goes with the profile. Edit mode keeps
             // showing the step until something is picked.
             if (m_editingIndex < 0) retractLivePreview(ctx);
