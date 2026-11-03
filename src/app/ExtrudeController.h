@@ -135,6 +135,8 @@ private:
     int  findJoinHost(const IopContext& ctx, int excludeBody = -1) const;
     // Edit mode: switch the edited step between Join / Cut / New Body.
     void setModeEdit(const IopContext& ctx, ExtrudeMode mode);
+    void updateEditGhost(const IopContext& ctx);
+    bool m_editGhost = false;   // edit-mode cut ghost is on screen
     void autoPickMode(const IopContext& ctx);
     void setModeManual(const IopContext& ctx, ExtrudeMode mode);
 

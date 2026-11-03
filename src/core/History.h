@@ -112,6 +112,10 @@ public:
     // half-built state. Pass true from one-shot Apply-Changes paths; leave false
     // for per-frame previews (the snapshot copy isn't free).
     bool editStep(int index, Document& doc, bool transactional = false);
+    // Fork: the next preview editStep keeps bodies that appear during the
+    // replay instead of pruning them as orphans - an edited step switched to
+    // New Body mints one on purpose.
+    void keepNewBodiesOnNextEdit() { m_keepNewBodiesOnce = true; }
 
     // After an inline sketch-dimension edit at `editedStep` (e.g. a circle's
     // diameter typed in its history-step properties), carry the new value into
@@ -196,6 +200,8 @@ public:
     const std::vector<std::unique_ptr<Operation>>& operations() const;
 
 private:
+    bool m_keepNewBodiesOnce = false;
+
     std::vector<std::unique_ptr<Operation>> m_operations;
     int m_currentIndex = -1;
     int m_breakpoint = -1;

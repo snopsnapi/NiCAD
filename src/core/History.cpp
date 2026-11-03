@@ -281,6 +281,8 @@ bool History::editStep(int index, Document& doc, bool transactional) {
 
     m_lastEditFailStep = -1;
     ++m_revision;
+    const bool keepNewBodies = m_keepNewBodiesOnce;
+    m_keepNewBodiesOnce = false;
     if (index < 0 || index >= static_cast<int>(m_operations.size())) {
         return false;
     }
@@ -444,7 +446,7 @@ bool History::editStep(int index, Document& doc, bool transactional) {
     //
     // Transactional (commit) mode: restoreSnapshot() handles cleanup on failure;
     // on success the history should be clean - skip this guard.
-    if (!transactional) {
+    if (!transactional && !keepNewBodies) {
         std::set<int> preSet(preEditBodyIds.begin(), preEditBodyIds.end());
         for (int id : doc.getAllBodyIds()) {
             if (!preSet.count(id)) {

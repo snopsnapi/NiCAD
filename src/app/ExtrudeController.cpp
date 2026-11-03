@@ -352,9 +352,12 @@ void ExtrudeController::update(const IopContext& ctx) {
     materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
     writeEditDistance(ctx, opDistance());
     setPreviewOk(m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history));
+    updateEditGhost(ctx);
 }
 
 void ExtrudeController::finishEdit(const IopContext& ctx) {
+    if (m_editGhost && ctx.clearGhost) ctx.clearGhost();
+    m_editGhost = false;
     if (m_shownSketch >= 0) {
         ctx.doc.setSketchVisible(m_shownSketch, false);
         m_shownSketch = -1;
@@ -375,7 +378,10 @@ void ExtrudeController::cancel(const IopContext& ctx) {
         if (m_modeEdited)
             if (auto* op = dynamic_cast<ExtrudeOp*>(
                     const_cast<Operation*>(ctx.history.getStep(m_editingIndex))))
+            {
                 op->requestModeChange(m_origMode, m_origTarget);
+                if (m_origMode == ExtrudeMode::NewBody) ctx.history.keepNewBodiesOnNextEdit();
+            }
         if (m_profileEdited)
             if (auto* op = dynamic_cast<ExtrudeOp*>(
                     const_cast<Operation*>(ctx.history.getStep(m_editingIndex))))
@@ -524,6 +530,8 @@ void ExtrudeController::setModeEdit(const IopContext& ctx, ExtrudeMode mode) {
     }
     materializr::BodyChangeScope trackBodies(ctx.doc, ctx.markBodyDirty, ctx.markMeshesDirty);
     op->requestModeChange(mode, target);
+    // A switch to New Body mints a body mid-replay; keep it.
+    if (mode == ExtrudeMode::NewBody) ctx.history.keepNewBodiesOnNextEdit();
     if (!m_editPreview.replay(m_editingIndex, ctx.doc, ctx.history)) {
         // The replay put the model and the step's mode back.
         if (ctx.toast)
@@ -532,6 +540,30 @@ void ExtrudeController::setModeEdit(const IopContext& ctx, ExtrudeMode mode) {
     m_mode = op->getMode();
     m_targetBody = op->getTargetBody();
     m_modeEdited = true;
+    updateEditGhost(ctx);
+}
+
+// Edit mode has no tool-volume body (the preview is the replay itself), so a
+// Cut shows its tool as the renderer's see-through red ghost, like creating.
+void ExtrudeController::updateEditGhost(const IopContext& ctx) {
+    const bool want = m_editingIndex >= 0 && !m_surface &&
+                      m_mode == ExtrudeMode::Subtract && std::abs(m_distance) > 0.01f &&
+                      !m_profile.IsNull() && ctx.showGhost;
+    if (!want) {
+        if (m_editGhost && ctx.clearGhost) ctx.clearGhost();
+        m_editGhost = false;
+        return;
+    }
+    TopoDS_Shape tool;
+    try {
+        BRepPrimAPI_MakePrism mk(m_profile, gp_Vec(m_normal.x * m_distance,
+                                                   m_normal.y * m_distance,
+                                                   m_normal.z * m_distance));
+        if (mk.IsDone()) tool = mk.Shape();
+    } catch (...) {}
+    if (tool.IsNull()) return;
+    ctx.showGhost(tool, true);
+    m_editGhost = true;
 }
 
 void ExtrudeController::setModeManual(const IopContext& ctx, ExtrudeMode mode) {
