@@ -58,7 +58,9 @@ enum class ToolAction {
     SurfaceExtrude, Sweep, TrimSurface, ExtendSurface, OffsetSurface, StudioSpline,
     CurvePointCondition,
     // Form workspace.
-    FormBox, FormPlane, FormCylinder, FormSphere, EditForm, ConvertForm
+    FormBox, FormPlane, FormCylinder, FormSphere, EditForm, ConvertForm,
+    // Delete with a Faces-only option (bodies, or just their faces).
+    DeleteSmart
 };
 
 class Toolbar {

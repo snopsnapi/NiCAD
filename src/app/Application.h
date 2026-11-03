@@ -1347,6 +1347,9 @@ private:
     // (SelectionType::OriginPlane). Shown when m_showOrigin, and always
     // while a command waits for a plane (Sketch). Toggle on the right edge.
     bool m_showOrigin = true;
+    // Fork: Delete's "Faces only" box - delete picked faces (body left open)
+    // instead of whole bodies.
+    bool m_deleteFacesOnly = false;
     bool originVisible() const;
     float originHalfSize() const;   // world size giving a steady screen size
     // Nearest origin plane under window-local (x, y): which = 0 XY, 1 XZ,

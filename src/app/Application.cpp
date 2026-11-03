@@ -84,6 +84,7 @@ inline void resetFpuForOcct() {
 #include "modeling/Sketch.h"
 #include "modeling/SweepOp.h"
 #include "modeling/FormOp.h"
+#include "modeling/DefeatureOp.h"
 #include "viewport/FormRenderer.h"
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
@@ -2796,6 +2797,37 @@ void Application::handleToolAction(int action) {
             const int fid = selectedFormId();
             const int step = formStepForId(fid);
             if (step >= 0) beginEditForm(step);
+            break;
+        }
+        case ToolAction::DeleteSmart: {
+            if (!m_deleteFacesOnly) {
+                // Whole bodies: the Delete plugin, as before.
+                const auto& contribs = PluginRegistry::instance().toolbarContributions();
+                for (size_t i = 0; i < contribs.size(); ++i)
+                    if (contribs[i].name == "Delete") {
+                        if (m_toolbar) m_toolbar->fireRailPlugin(static_cast<int>(i));
+                        break;
+                    }
+                break;
+            }
+            // Faces only: one no-heal Remove step per body.
+            std::map<int, std::vector<TopoDS_Face>> byBody;
+            for (const auto& e : m_selection->getSelection())
+                if (e.type == SelectionType::Face && e.bodyId >= 0 && !e.shape.IsNull())
+                    byBody[e.bodyId].push_back(TopoDS::Face(e.shape));
+            auto trackBodies = trackBodyChanges();
+            int failed = 0;
+            for (auto& [bodyId, faces] : byBody) {
+                auto op = std::make_unique<DefeatureOp>();
+                op->setBody(bodyId);
+                op->setHeal(false);
+                for (const TopoDS_Face& f : faces) op->addFace(f);
+                if (!m_history->pushOperation(std::move(op), *m_document)) ++failed;
+            }
+            if (failed)
+                showToast(materializr::tr("Some faces couldn't be deleted - a body can't lose all its faces."));
+            m_selection->clear();
+            markDirty();
             break;
         }
         case ToolAction::ConvertForm: {
