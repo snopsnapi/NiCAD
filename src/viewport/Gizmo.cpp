@@ -153,6 +153,11 @@ bool Gizmo::initialize() {
     glGenBuffers(1, &m_cubeVbo);
     glGenVertexArrays(1, &m_planeVao);
     glGenBuffers(1, &m_planeVbo);
+    // Fork: the combined gizmo's rotation arcs. Never generated before, so
+    // the arcs drew from VAO 0 (client arrays, null pointer) and crashed in
+    // the GL driver the moment the combined gizmo was shown.
+    glGenVertexArrays(1, &m_arcVao);
+    glGenBuffers(1, &m_arcVbo);
 
     buildArrowMesh();
     buildRingMesh();
