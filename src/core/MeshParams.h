@@ -634,6 +634,81 @@ inline int alignRuledWallsToEdges(const TopoDS_Shape& shape, double deflection,
     return redone;
 }
 
+// Fork: edges next to a ruled wall whose two faces sample them differently -
+// each one a visible crack in the shaded body (the wall was strip-meshed on
+// its own, its neighbours by BRepMesh). Compares the 3D nodes of the edge's
+// polygon on each face's triangulation.
+inline int countWallCracks(const TopoDS_Shape& shape) {
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+    std::vector<TopoDS_Face> walls;
+    for (TopExp_Explorer fx(shape, TopAbs_FACE); fx.More(); fx.Next()) {
+        RuledWall w;
+        if (ruledWallOf(TopoDS::Face(fx.Current()), w))
+            walls.push_back(TopoDS::Face(fx.Current()));
+    }
+    if (walls.empty()) return 0;
+    auto isWall = [&](const TopoDS_Shape& f) {
+        for (const TopoDS_Face& w : walls) if (w.IsSame(f)) return true;
+        return false;
+    };
+    int cracks = 0;
+    for (int i = 1; i <= edgeFaces.Extent(); ++i) {
+        const TopoDS_Edge e = TopoDS::Edge(edgeFaces.FindKey(i));
+        const TopTools_ListOfShape& fl = edgeFaces.FindFromIndex(i);
+        std::vector<TopoDS_Face> fs;
+        for (const TopoDS_Shape& s : fl) {
+            bool dup = false;
+            for (const TopoDS_Face& g : fs) if (g.IsSame(s)) { dup = true; break; }
+            if (!dup) fs.push_back(TopoDS::Face(s));
+        }
+        if (fs.size() != 2 || (!isWall(fs[0]) && !isWall(fs[1]))) continue;
+        std::vector<gp_Pnt> pts[2];
+        bool ok = true;
+        for (int k = 0; k < 2 && ok; ++k) {
+            TopLoc_Location loc;
+            Handle(Poly_Triangulation) t = BRep_Tool::Triangulation(fs[k], loc);
+            if (t.IsNull()) { ok = false; break; }
+            Handle(Poly_PolygonOnTriangulation) po = BRep_Tool::PolygonOnTriangulation(e, t, loc);
+            if (po.IsNull()) { ok = false; break; }
+            const gp_Trsf tr = loc.Transformation();
+            for (int j = 1; j <= po->NbNodes(); ++j)
+                pts[k].push_back(t->Node(po->Node(j)).Transformed(tr));
+        }
+        if (!ok) continue;
+        if (pts[0].size() != pts[1].size()) { ++cracks; continue; }
+        const std::size_t n = pts[0].size();
+        // Same edge, possibly walked in opposite senses by the two faces.
+        bool fwd = true, rev = true;
+        for (std::size_t j = 0; j < n && (fwd || rev); ++j) {
+            if (pts[0][j].Distance(pts[1][j]) > 1e-4) fwd = false;
+            if (pts[0][j].Distance(pts[1][n - 1 - j]) > 1e-4) rev = false;
+        }
+        if (!fwd && !rev) ++cracks;
+    }
+    return cracks;
+}
+
+// Fork: close the cracks between strip-meshed ruled walls and their
+// neighbours on the DISPLAY paths (export already aligns, see
+// meshWithFallback). First the cheap fix - re-strip each wall on the
+// neighbours' samples; any crack left (a wall trimmed by a boolean, rims
+// sampled differently) means the whole shape is re-meshed by BRepMesh alone,
+// which shares every edge's discretization between its faces. Call after
+// BRepMesh, before the bare-face fallback. Returns true when it re-meshed.
+inline bool sealRuledWallCracks(const TopoDS_Shape& shape, double deflection,
+                                double angularDeflection, bool inParallel) {
+    if (countWallCracks(shape) == 0) return false;
+    alignRuledWallsToEdges(shape, deflection, angularDeflection);
+    const int left = countWallCracks(shape);
+    if (left == 0) return false;
+    std::fprintf(stderr, "[mesh] %d cracked edge(s) at ruled walls - re-meshing "
+                         "the shape without the strip mesher\n", left);
+    BRepTools::Clean(shape);
+    BRepMesh_IncrementalMesh(shape, meshParams(deflection, angularDeflection, inParallel));
+    return true;
+}
+
 inline void meshWithFallback(const TopoDS_Shape& shape, double deflection,
                              double angularDeflection, bool inParallel)
 {

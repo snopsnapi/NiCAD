@@ -174,6 +174,9 @@ void MeshWorker::run()
             materializr::premeshRuledWalls(job.copy, job.deflection, job.angularDeflection);
             BRepMesh_IncrementalMesh mesher(
                 job.copy, materializr::meshParams(job.deflection, job.angularDeflection, true));
+            // Fork: strip-meshed walls left cracks against their neighbours.
+            materializr::sealRuledWallCracks(job.copy, job.deflection,
+                                             job.angularDeflection, true);
             r.millis = std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - t0).count();
             // Delabella (the algorithm meshParams() selects) can leave a face

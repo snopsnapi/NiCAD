@@ -142,6 +142,9 @@ ParallelMeshBatch parallelMesh(const std::vector<ParallelMeshJob>& jobs,
                                                       angularDeflection);
                                     BRepMesh_IncrementalMesh mesher(jobs[i].shape,
                                         meshParams(deflection, angularDeflection, false));
+                                    // Fork: seal strip-wall cracks.
+                                    sealRuledWallCracks(jobs[i].shape, deflection,
+                                                        angularDeflection, false);
                                     repairInaccurateFaces(jobs[i].shape, deflection,
                                                           angularDeflection);
                                     if (elapsed(start) >= meshcache::kStoreMinMs)

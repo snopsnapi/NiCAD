@@ -518,6 +518,8 @@ int ShapeRenderer::tessellate(const TopoDS_Shape& shape, float deflection,
         materializr::premeshRuledWalls(shape, deflection, angularDeflection);
         BRepMesh_IncrementalMesh meshGen(
             shape, materializr::meshParams(deflection, angularDeflection, true));
+        // Fork: strip-meshed walls left cracks against their neighbours.
+        materializr::sealRuledWallCracks(shape, deflection, angularDeflection, true);
 
         // Delabella (chosen above for speed on many-holed faces) can leave a
         // face bare - confirmed on a real boolean-result body where two large
@@ -551,6 +553,9 @@ int ShapeRenderer::tessellate(const TopoDS_Shape& shape, float deflection,
         }
         // A face can also come back meshed but wrong - see repairInaccurateFaces.
         materializr::repairInaccurateFaces(shape, deflection, angularDeflection);
+        } else {
+            // A mesh cached before the crack fix: seal it too.
+            materializr::sealRuledWallCracks(shape, deflection, angularDeflection, true);
         }
 
         m_lastMeshMs = std::chrono::duration<double, std::milli>(
