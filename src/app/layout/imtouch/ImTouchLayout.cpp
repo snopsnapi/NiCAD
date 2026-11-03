@@ -1773,6 +1773,27 @@ void Application::renderPendingCommandBar() {
             ImGui::SameLine(0.0f, 12.0f * s);
             ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
         }
+        // Move: Bodies or Faces (Fusion's Move Object), before picking.
+        if (m_pendingCmd.action == static_cast<int>(ToolAction::Move)) {
+            int mode = m_moveFacesMode ? 1 : 0;
+            if (touchui::pillButton("mvBodies", MZ_ICON_BODY, materializr::tr("Bodies"), mode == 0))
+                mode = 0;
+            ImGui::SameLine(0.0f, 6.0f * s);
+            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
+            if (touchui::pillButton("mvFaces", MZ_ICON_MOVE, materializr::tr("Faces"), mode == 1))
+                mode = 1;
+            if ((mode == 1) != m_moveFacesMode) {
+                m_moveFacesMode = (mode == 1);
+                m_pendingCmd.typeMask = m_moveFacesMode ? kSelF : kSelB;
+                std::vector<SelectionEntry> drop;
+                for (const auto& e : m_selection->getSelection())
+                    if (!(m_pendingCmd.typeMask & (1u << static_cast<unsigned>(e.type))))
+                        drop.push_back(e);
+                for (const auto& e : drop) m_selection->removeFromSelection(e);
+            }
+            ImGui::SameLine(0.0f, 12.0f * s);
+            ImGui::SetCursorPosY(textY - (side - ImGui::GetFontSize()) * 0.5f);
+        }
         cancel = touchui::iconButton("pcCancel", MZ_ICON_DISCARD, side);
         if (!m_pendingCmd.single) {
             ImGui::SameLine(0.0f, 10.0f * s);

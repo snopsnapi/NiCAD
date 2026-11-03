@@ -45,7 +45,15 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
     // Convert OCCT internal faults (SIGSEGV/SIGFPE inside the kernel) into
     // catchable Standard_Failure exceptions, matching the desktop build.
-    OSD::SetSignal(Standard_False);
+    // Fork: `adb shell setprop debug.materializr.nosignal 1` leaves crashes to
+    // Android's debuggerd, which logs a full native backtrace (OCCT's handler
+    // aborts with no stack when nothing catches the converted signal).
+    {
+        char v[PROP_VALUE_MAX] = {};
+        const bool noSignal = __system_property_get("debug.materializr.nosignal", v) > 0 &&
+                              std::atoi(v) != 0;
+        if (!noSignal) OSD::SetSignal(Standard_False);
+    }
 
     try {
         materializr::Application app(/*safeMode=*/false);
