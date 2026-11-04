@@ -175,7 +175,7 @@ void Application::renderModernLayout() {
                                 IM_COL32_WHITE, 7.0f * s);
             ImGui::SetCursorPos(ImVec2(lx + chip + 10.0f * s,
                                        (topH - ImGui::GetTextLineHeight()) * 0.5f));
-            ImGui::TextColored(touchui::textPrimary(), "%s", materializr::tr("Materializr"));
+            ImGui::TextColored(touchui::textPrimary(), "%s", materializr::tr("NiCAD"));
             // The old "/ projectname" breadcrumb is now the tab row: one pill
             // per open project (dirty dot included), right-click/long-press
             // for Save / Save As / Close, and a trailing "+".

@@ -238,7 +238,7 @@ Application::Application(bool safeMode, float uiScaleOverride)
 #endif
     // The CLI scale has to reach the constructor: the INITIAL window size is
     // scaled by it, and setUiScaleOverride() below runs too late for that.
-    m_window = std::make_unique<Window>(1600, 900, "Materializr", m_cliUiScale);
+    m_window = std::make_unique<Window>(1600, 900, "NiCAD", m_cliUiScale);
     m_viewport = std::make_unique<Viewport>();
     m_grid = std::make_unique<Grid>();
     m_shapeRenderer = std::make_unique<ShapeRenderer>();
@@ -1815,7 +1815,7 @@ void Application::renderSmallScreenWarning() {
     if (ImGui::BeginPopupModal("Small screen", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::PushTextWrapPos(uiW(440));
-        ImGui::TextWrapped("%s", materializr::tr("Materializr is designed for tablets and larger displays. On a small screen the panels and toolbars are cramped and some controls may be hard to reach - a tablet or larger is strongly recommended."));
+        ImGui::TextWrapped("%s", materializr::tr("NiCAD is designed for tablets and larger displays. On a small screen the panels and toolbars are cramped and some controls may be hard to reach - a tablet or larger is strongly recommended."));
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
         static bool dontShow = false;
@@ -8301,7 +8301,7 @@ void Application::renderProjectRecoveryPrompt() {
             ImGui::TextDisabled("%s", materializr::tr("An unsaved project (never written to a file)."));
         ImGui::TextDisabled(materializr::tr("%d bodies, %d history steps."),
                             meta.bodyCount, meta.stepCount);
-        ImGui::TextDisabled("%s", materializr::tr("Materializr didn't close cleanly (a crash, hang, or restart)."));
+        ImGui::TextDisabled("%s", materializr::tr("NiCAD didn't close cleanly (a crash, hang, or restart)."));
         // One snapshot per tab the dead instance had open - the summary above
         // describes the newest; all of them come back, a tab each.
         const int nOrphans = materializr::projectRecoveryOrphanCount();

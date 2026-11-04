@@ -39,21 +39,21 @@ bool AboutDialog::isVisible() const {
 void AboutDialog::render() {
     if (!m_visible) return;
 
-    ImGui::OpenPopup("About Materializr");
+    ImGui::OpenPopup("About NiCAD");
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(uiSz(420, 400), ImGuiCond_Appearing);
 
-    if (ImGui::BeginPopupModal("About Materializr", &m_visible,
+    if (ImGui::BeginPopupModal("About NiCAD", &m_visible,
                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
 
         // App name - slightly larger via font scaling.
         float origScale = ImGui::GetFont()->Scale;
         ImGui::GetFont()->Scale = 2.0f;
         ImGui::PushFont(ImGui::GetFont());
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Materializr").x) * 0.5f);
-        ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Materializr"));
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("NiCAD").x) * 0.5f);
+        ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("NiCAD"));
         ImGui::GetFont()->Scale = origScale;
         ImGui::PopFont();
 
@@ -65,7 +65,8 @@ void AboutDialog::render() {
         ImGui::Separator();
         ImGui::Spacing();
 
-        const char* desc = "Open-source parametric 3D CAD";
+        // Fork: NiCAD is a modified version of Materializr (GPLv3 section 5a).
+        const char* desc = "Tablet CAD - a fork of Materializr";
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(desc).x) * 0.5f);
         ImGui::Text("%s", desc);
 

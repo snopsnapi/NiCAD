@@ -76,7 +76,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          MATERIALIZR_APP_ID=com.nikaishi.materializr MATERIALIZR_APP_LABEL="Materializr N" \
+          MATERIALIZR_APP_ID=com.nikaishi.materializr MATERIALIZR_APP_LABEL="NiCAD" \
           MATERIALIZR_OCCT_PREFIX="$HOME/Android/prefix/arm64-v8a" ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK

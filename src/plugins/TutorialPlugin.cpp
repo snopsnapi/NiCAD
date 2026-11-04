@@ -50,7 +50,7 @@ struct Step {
 const Step kSteps[] = {
     {
         "Welcome to Materializr",
-        "Materializr is a parametric 3D CAD app: sketch a 2D shape, turn it into "
+        "NiCAD is a parametric 3D CAD app: sketch a 2D shape, turn it into "
         "a solid, then keep refining it. This quick tour covers the essentials - "
         "it takes a minute. You can reopen it anytime from Help > Getting Started.",
         nullptr, nullptr, {nullptr, nullptr, nullptr}
@@ -289,7 +289,7 @@ void renderLayoutPicker(bool& close) {
     ImGui::SeparatorText(materializr::tr("Choose your workspace"));
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(
-        materializr::tr("Materializr has three interface styles. Tap one to try it - the app behind this window switches instantly, so you can see the real thing. You can change your mind anytime in Settings > Appearance."));
+        materializr::tr("NiCAD has three interface styles. Tap one to try it - the app behind this window switches instantly, so you can see the real thing. You can change your mind anytime in Settings > Appearance."));
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
 

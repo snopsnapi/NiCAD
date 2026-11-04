@@ -186,7 +186,7 @@ LandingPage::Action LandingPage::render() {
         ImGui::SameLine();
     }
     ImGui::SetWindowFontScale(1.5f);
-    ImGui::TextColored(accentText(), "%s", materializr::tr("Materializr"));
+    ImGui::TextColored(accentText(), "%s", materializr::tr("NiCAD"));
     ImGui::SetWindowFontScale(1.0f);
     ImGui::SameLine();
     ImGui::TextColored(dimText(), "v" MATERIALIZR_VERSION);

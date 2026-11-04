@@ -1,3 +1,10 @@
+# NiCAD
+
+> **NiCAD** is a tablet-first fork of [Materializr](https://github.com/materializr-cad/materializr)
+> (Android, touch and stylus, reverse engineering of scans). Branch `nikaishi`;
+> changes are listed in [`FORK-CHANGES.md`](FORK-CHANGES.md). Builds: [Releases](../../releases).
+> The original README follows.
+
 # Materializr
 
 **Open-source parametric 3D CAD for makers** - constraint sketches, solid

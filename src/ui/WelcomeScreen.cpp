@@ -44,8 +44,8 @@ WelcomeScreen::Action WelcomeScreen::render() {
         float origScale = ImGui::GetFont()->Scale;
         ImGui::GetFont()->Scale = 2.0f;
         ImGui::PushFont(ImGui::GetFont());
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("Materializr").x) * 0.5f);
-        ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("Materializr"));
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize("NiCAD").x) * 0.5f);
+        ImGui::TextColored(materializr::accentText(), "%s", materializr::tr("NiCAD"));
         ImGui::GetFont()->Scale = origScale;
         ImGui::PopFont();
 
