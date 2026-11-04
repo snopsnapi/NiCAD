@@ -15,6 +15,8 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -242,6 +244,91 @@ TEST(FaceTweak, TheBoreThroughAMovedFaceSurvivesIt) {
         EXPECT_NEAR(s.Cylinder().Radius(), 3.0, 1e-9);
     }
     EXPECT_TRUE(foundBore) << "the bore must still be a cylinder of its own";
+}
+
+TEST(FaceTweak, ABoreTiltedOutThroughAWallCutsTheWall) {
+    // Fork (Fusion's Move Faces): a slanted blind bore near a side wall. Tilting
+    // the top face lengthens the bore up to the new plane, and on the high side
+    // it now runs out through the side wall. The bore must cut the wall open -
+    // not leave a self-intersecting solid with a half-cylinder poking out (what
+    // the plain engine used to return).
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    const TopoDS_Shape bore =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(6, 10, 3), gp_Dir(-0.5, 0, 1)), 2.0, 9.0).Shape();
+    BRepAlgoAPI_Cut cut(box, bore);
+    ASSERT_TRUE(cut.IsDone());
+    const TopoDS_Shape bored = cut.Shape();
+    gp_Trsf tilt;   // the near side (x = 0) rises ~8 mm: the slanted bore now meets the wall x = 0
+    tilt.SetRotation(gp_Ax1(gp_Pnt(20, 0, 10), gp_Dir(0, 1, 0)), 25.0 * M_PI / 180.0);
+
+    const auto plain = tweak::moveFace(box, faceTowards(box, gp_Dir(0, 0, 1)), tilt);
+    ASSERT_TRUE(plain.ok()) << tweak::refusalText(plain.refusal);
+
+    const auto r = tweak::moveFace(bored, faceTowards(bored, gp_Dir(0, 0, 1)), tilt);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(BRepCheck_Analyzer(r.shape).IsValid());
+    BOPAlgo_ArgumentAnalyzer an;
+    an.SetShape1(r.shape);
+    an.SelfInterMode() = Standard_True;
+    an.Perform();
+    EXPECT_FALSE(an.HasFaulty()) << "the bore has to cut the wall, not pass through it";
+    // Less than the same tilt without a bore, by more than the original bore.
+    EXPECT_LT(vol(r.shape), vol(plain.shape) - (vol(box) - vol(bored)) + 1e-3);
+    // The wall x = 0 now has the bore's mouth cut out of it (a notch at its
+    // top edge or a hole): less wall than the same tilt without the bore.
+    auto wallArea = [](const TopoDS_Shape& sh) {
+        double a = 0.0;
+        for (TopExp_Explorer ex(sh, TopAbs_FACE); ex.More(); ex.Next()) {
+            BRepAdaptor_Surface s(TopoDS::Face(ex.Current()));
+            if (s.GetType() != GeomAbs_Plane) continue;
+            if (std::abs(std::abs(s.Plane().Axis().Direction().X()) - 1.0) > 1e-9) continue;
+            if (s.Plane().Distance(gp_Pnt(0, 5, 5)) > 1e-6) continue;   // the wall x = 0
+            GProp_GProps g;
+            BRepGProp::SurfaceProperties(ex.Current(), g);
+            a += g.Mass();
+        }
+        return a;
+    };
+    EXPECT_LT(wallArea(r.shape), wallArea(plain.shape) - 1.0)
+        << "the side wall must carry the bore's opening";
+}
+
+TEST(FaceTweak, ABossStaysPutAndIsTrimmedOrBuried) {
+    // Fusion: the face a boss stands on moves, the boss itself (not selected)
+    // stays where it is - raised a little, less of it shows; raised past its
+    // top, it is swallowed.
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    const TopoDS_Shape boss =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(10, 10, 10), gp_Dir(0, 0, 1)), 3.0, 4.0).Shape();
+    BRepAlgoAPI_Fuse fuse(box, boss);
+    ASSERT_TRUE(fuse.IsDone());
+    const TopoDS_Shape bossed = fuse.Shape();
+    // The box's top (the biggest +Z face), not the boss's own top.
+    TopoDS_Face top;
+    double topArea = 0.0;
+    for (TopExp_Explorer ex(bossed, TopAbs_FACE); ex.More(); ex.Next()) {
+        BRepAdaptor_Surface s(TopoDS::Face(ex.Current()));
+        if (s.GetType() != GeomAbs_Plane) continue;
+        gp_Dir n = s.Plane().Axis().Direction();
+        if (ex.Current().Orientation() == TopAbs_REVERSED) n.Reverse();
+        if (n.Z() < 0.999) continue;
+        GProp_GProps g;
+        BRepGProp::SurfaceProperties(ex.Current(), g);
+        if (g.Mass() > topArea) { topArea = g.Mass(); top = TopoDS::Face(ex.Current()); }
+    }
+    ASSERT_FALSE(top.IsNull());
+
+    gp_Trsf up2;
+    up2.SetTranslation(gp_Vec(0, 0, 2));
+    const auto a = tweak::moveFace(bossed, top, up2);
+    ASSERT_TRUE(a.ok()) << tweak::refusalText(a.refusal);
+    EXPECT_NEAR(vol(a.shape), 20.0 * 20.0 * 12.0 + M_PI * 9.0 * 2.0, 1e-2);
+
+    gp_Trsf up5;
+    up5.SetTranslation(gp_Vec(0, 0, 5));
+    const auto b = tweak::moveFace(bossed, top, up5);
+    ASSERT_TRUE(b.ok()) << tweak::refusalText(b.refusal);
+    EXPECT_NEAR(vol(b.shape), 20.0 * 20.0 * 15.0, 1e-2);
 }
 
 TEST(FaceTweak, AFaceFromAnotherBodyIsRefused) {

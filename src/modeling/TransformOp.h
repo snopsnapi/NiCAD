@@ -26,6 +26,8 @@ public:
     // Centre for Rotate/Scale (default world origin). Gizmo transforms use the
     // body's bounding-box centre so it rotates/scales in place.
     void setCenter(double cx, double cy, double cz);
+    // Fork (MoveOp): apply this exact rigid transform (the raw path).
+    void setRawTransform(const gp_Trsf& t) { m_rawTrsf = t; m_useRawTrsf = true; }
 
     // Sketches to de-link when this body moves on its own (link model): moving a
     // body without its driving sketch breaks the parametric link. Bundled here so

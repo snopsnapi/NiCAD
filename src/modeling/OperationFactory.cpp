@@ -11,6 +11,7 @@
 #include "BoundaryFillOp.h"
 #include "PatchOp.h"
 #include "FaceTweakOp.h"
+#include "MoveOp.h"
 #include "SewOp.h"
 #include "SketchTransformOp.h"
 #include "SplitBodyOp.h"
@@ -103,6 +104,7 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "boundary_fill")   return std::make_unique<BoundaryFillOp>();
     if (typeId == "patch")           return std::make_unique<PatchOp>();
     if (typeId == "face_tweak")      return std::make_unique<FaceTweakOp>();
+    if (typeId == "move")            return std::make_unique<MoveOp>();
     if (typeId == "sew")             return std::make_unique<SewOp>();
     if (typeId == "sweep")           return std::make_unique<SweepOp>();
     //   - Tier 2b (persistent sub-shape identity, see SubShapeIndex.h):

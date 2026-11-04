@@ -5520,8 +5520,32 @@ void Application::renderViewport() {
                                                    m_sketchGizmoDragSketches.empty() &&
                                                    m_planeGizmoDrag.empty() &&
                                                    !m_axisGizmoDrag.empty();
+                            // Fork: bodies alone (no sketch / plane / axis in the
+                            // drag, no re-derived link, not Scale) record ONE
+                            // parametric Move step that later drags compose into.
+                            const bool paramMove = gm != GizmoMode::Scale && nBodies > 0 &&
+                                m_sketchGizmoDragSketches.empty() && m_planeGizmoDrag.empty() &&
+                                m_axisGizmoDrag.empty() && rederiveBodies.empty();
                             if (!anyValid) {
                                 /* below-threshold drag: leave history alone */
+                            } else if (paramMove) {
+                                gp_Trsf dt;
+                                if (gm == GizmoMode::Translate)
+                                    dt.SetTranslation(gp_Vec(d.x, d.y, d.z));
+                                else
+                                    dt.SetRotation(gp_Ax1(gp_Pnt(pivot.x, pivot.y, pivot.z),
+                                                          gp_Dir(m_gizmoRotAxis.x,
+                                                                 m_gizmoRotAxis.y,
+                                                                 m_gizmoRotAxis.z)),
+                                                   ang * M_PI / 180.0);
+                                std::vector<std::pair<int, std::vector<int>>> mb;
+                                for (auto& [id, _] : m_gizmoDragOriginals) {
+                                    std::vector<int> det;
+                                    for (auto& [s, bs] : skLinks)
+                                        if (bs.count(id)) det.push_back(s);
+                                    mb.push_back({id, det});
+                                }
+                                commitMoveBodies(mb, dt, pivot);
                             } else if (planeOnly) {
                                 // Plane gizmo wrote the new pose to Document via
                                 // setPlane during the drag; record an undoable
@@ -5757,7 +5781,7 @@ void Application::renderViewport() {
                             // single-body TransformOp branch above already absorbed
                             // them via addDetachSketch (undoable). For the rarer
                             // multi-body path the op can't carry them, so set directly.
-                            if (isMulti)
+                            if (isMulti && !paramMove)
                                 for (int s : bodyAloneDetach)
                                     if (auto sk = m_document->getSketch(s)) sk->setDetachedFromBody(true);
                             // Linked unison: the body's TransformOp was skipped - let it

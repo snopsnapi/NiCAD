@@ -11,6 +11,9 @@
 #include "core/SelectionManager.h"
 #include "modeling/FaceTweak.h"
 #include "modeling/FaceTweakOp.h"
+#include "modeling/MoveOp.h"
+#include "viewport/Gizmo.h"
+#include <algorithm>
 #include "i18n.h"
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepGProp.hxx>
@@ -125,18 +128,24 @@ void Application::commitFaceDrag(const gp_Trsf& t) {
     markBodyDirty(d.bodyId);
     if (t.Form() == gp_Identity) return;
 
-    auto op = std::make_unique<FaceTweakOp>();
-    op->setBody(d.bodyId);
-    op->setFace(d.face);
-    op->setTransform(t);
     auto trackBodies = trackBodyChanges();
-    // The op is gone once a push is refused - the reason comes from the
-    // engine run on the same input.
-    if (!m_history->pushOperation(std::move(op), *m_document)) {
-        const tweak::Result r = tweak::moveFace(d.orig, d.face, t);
-        showToast(std::string(materializr::tr("Couldn't move the face: ")) +
-                  tweak::refusalText(r.refusal));
-        return;
+    // Fusion: one Move step per session - a further drag of the same face
+    // composes into it.
+    if (MoveOp* step = moveStepFor(true, {d.bodyId}, d.face)) {
+        if (!replayMoveStep(step, t * step->trsf())) return;
+    } else {
+        auto op = std::make_unique<MoveOp>();
+        op->setFace(d.bodyId, d.face);
+        op->setPivot(d.centre.x, d.centre.y, d.centre.z);
+        op->setFromTrsf(t);
+        if (!m_history->pushOperation(std::move(op), *m_document)) {
+            const tweak::Result r = tweak::moveFace(d.orig, d.face, t);
+            showToast(std::string(materializr::tr("Couldn't move the face: ")) +
+                      tweak::refusalText(r.refusal));
+            return;
+        }
+        m_moveStep = m_history->currentStep();
+        m_moveStepEditing = false;
     }
     markBodyDirty(d.bodyId);
     markDirty();
@@ -171,7 +180,133 @@ void Application::commitFaceDrag(const gp_Trsf& t) {
         e.subShapeIndex = bestIdx;
         e.shape = bestFace;
         m_selection->select(e);
+        m_moveStepFace = bestFace;
     }
+}
+
+// ── Parametric Move session ────────────────────────────────────────────────
+
+MoveOp* Application::activeMoveStep() const {
+    if (m_moveStep < 0 || !m_history) return nullptr;
+    if (!m_moveStepEditing && m_moveStep != m_history->currentStep()) return nullptr;
+    if (m_moveStep > m_history->currentStep()) return nullptr;
+    return dynamic_cast<MoveOp*>(const_cast<Operation*>(m_history->getStep(m_moveStep)));
+}
+
+MoveOp* Application::moveStepFor(bool face, const std::vector<int>& bodyIds,
+                                 const TopoDS_Face& f) const {
+    MoveOp* op = activeMoveStep();
+    if (!op) return nullptr;
+    if ((op->target() == MoveOp::Target::Face) != face) return nullptr;
+    std::vector<int> a = op->bodyIds(), b = bodyIds;
+    std::sort(a.begin(), a.end());
+    std::sort(b.begin(), b.end());
+    if (a != b) return nullptr;
+    if (face && (m_moveStepFace.IsNull() || !m_moveStepFace.IsSame(f))) return nullptr;
+    return op;
+}
+
+bool Application::replayMoveStep(MoveOp* op, const gp_Trsf& newTotal) {
+    if (!op || m_moveStep < 0) return false;
+    const double t0[3] = {op->translation()[0], op->translation()[1], op->translation()[2]};
+    const double r0[3] = {op->rotationDeg()[0], op->rotationDeg()[1], op->rotationDeg()[2]};
+    op->setFromTrsf(newTotal);
+    auto trackBodies = trackBodyChanges();
+    if (!m_history->editStep(m_moveStep, *m_document, /*transactional=*/true)) {
+        op->setParams(t0, r0);
+        m_history->editStep(m_moveStep, *m_document, true);
+        showToast(materializr::tr("Couldn't apply the move - the result is invalid or later steps depend on it."));
+        return false;
+    }
+    for (int id : op->bodyIds()) markBodyDirty(id);
+    markDirty();
+    return true;
+}
+
+void Application::commitMoveBodies(const std::vector<std::pair<int, std::vector<int>>>& bodies,
+                                   const gp_Trsf& d, const glm::vec3& pivot) {
+    std::vector<int> ids;
+    for (const auto& b : bodies) ids.push_back(b.first);
+    if (MoveOp* step = moveStepFor(false, ids, TopoDS_Face())) {
+        replayMoveStep(step, d * step->trsf());
+        return;
+    }
+    auto op = std::make_unique<MoveOp>();
+    for (const auto& [id, det] : bodies) op->addBody(id, det);
+    op->setPivot(pivot.x, pivot.y, pivot.z);
+    op->setFromTrsf(d);
+    auto trackBodies = trackBodyChanges();
+    if (!m_history->pushOperation(std::move(op), *m_document)) {
+        showToast(materializr::tr("Couldn't move the body."));
+        return;
+    }
+    m_moveStep = m_history->currentStep();
+    m_moveStepEditing = false;
+    for (int id : ids) markBodyDirty(id);
+}
+
+bool Application::moveStepMatchesSelection(MoveOp* op) const {
+    if (!op) return false;
+    if (m_moveStepEditing) return true;
+    if (op->target() == MoveOp::Target::Face) {
+        int b = -1;
+        TopoDS_Face f;
+        return faceMoveTarget(b, f) && !m_moveStepFace.IsNull() && m_moveStepFace.IsSame(f);
+    }
+    std::vector<int> sel;
+    for (const auto& e : m_selection->getSelection())
+        if (e.type == SelectionType::Body && e.bodyId >= 0) sel.push_back(e.bodyId);
+    std::vector<int> ids = op->bodyIds();
+    std::sort(sel.begin(), sel.end());
+    std::sort(ids.begin(), ids.end());
+    return sel == ids;
+}
+
+bool Application::applyMoveStepValues(MoveOp* op) {
+    if (!op) return false;
+    // User axes (Z up) -> world: user Y = world Z, user Z = world Y.
+    const double t[3] = {m_moveStepVals[0], m_moveStepVals[2], m_moveStepVals[1]};
+    const double r[3] = {m_moveStepVals[3], m_moveStepVals[5], m_moveStepVals[4]};
+    const double t0[3] = {op->translation()[0], op->translation()[1], op->translation()[2]};
+    const double r0[3] = {op->rotationDeg()[0], op->rotationDeg()[1], op->rotationDeg()[2]};
+    op->setParams(t, r);
+    auto trackBodies = trackBodyChanges();
+    if (!m_history->editStep(m_moveStep, *m_document, /*transactional=*/true)) {
+        op->setParams(t0, r0);
+        m_history->editStep(m_moveStep, *m_document, true);
+        showToast(materializr::tr("Couldn't apply the move - the result is invalid or later steps depend on it."));
+        return false;
+    }
+    for (int id : op->bodyIds()) markBodyDirty(id);
+    markDirty();
+    // The moved face handle changed with the rebuild; the next drag starts a
+    // new step unless the user picks the face again.
+    if (op->target() == MoveOp::Target::Face) m_moveStepFace.Nullify();
+    return true;
+}
+
+bool Application::beginMoveStepEdit(int historyIndex) {
+    auto* op = dynamic_cast<MoveOp*>(const_cast<Operation*>(m_history->getStep(historyIndex)));
+    if (!op) return false;
+    m_moveStep = historyIndex;
+    m_moveStepEditing = true;
+    m_moveStepFace.Nullify();
+    m_selection->clear();
+    if (op->target() == MoveOp::Target::Bodies) {
+        m_moveFacesMode = false;
+        for (int id : op->bodyIds()) {
+            SelectionEntry e;
+            e.type = SelectionType::Body;
+            e.bodyId = id;
+            try { e.shape = m_document->getBody(id); } catch (...) {}
+            m_selection->addToSelection(e);
+        }
+    } else {
+        m_moveFacesMode = true;
+    }
+    m_gizmo->setCombinedMove();
+    m_selection->setNavigationOnly(false);
+    return true;
 }
 
 void Application::cancelFaceDrag() {

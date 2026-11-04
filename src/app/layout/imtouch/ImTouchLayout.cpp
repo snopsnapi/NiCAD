@@ -1527,6 +1527,8 @@ void Application::renderImTouchLayout() {
                     handled = beginStudioSplineEdit(i);
                 if (!handled && op->isEnabled() && i <= curr && op->typeId() == "form")
                     handled = beginEditForm(i);
+                if (!handled && op->isEnabled() && i <= curr && op->typeId() == "move")
+                    handled = beginMoveStepEdit(i);   // fork: parametric Move
                 if (!handled) {
                     m_imTouchHistoryEdit = i;
                     m_imTouchStepBackup = op->serializeParams();

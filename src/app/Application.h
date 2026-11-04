@@ -60,6 +60,7 @@
 
 // Global (non-namespaced) op, forward-declared for configureFaceOp's signature.
 class MoveFaceOp;
+class MoveOp;
 
 namespace materializr {
 
@@ -1395,6 +1396,30 @@ private:
     void applyFaceDrag(const gp_Trsf& t);
     void commitFaceDrag(const gp_Trsf& t);
     void cancelFaceDrag();
+
+    // Fork: parametric Move (MoveOp). Consecutive moves of the same target
+    // compose into ONE history step (m_moveStep) - its translation and angles
+    // are what the Move panel shows and edits; a step tapped in the history
+    // reopens it (m_moveStepEditing).
+    int m_moveStep = -1;
+    bool m_moveStepEditing = false;
+    TopoDS_Face m_moveStepFace;   // face mode: the moved face, to match the next drag
+    MoveOp* activeMoveStep() const;
+    MoveOp* moveStepFor(bool face, const std::vector<int>& bodyIds,
+                              const TopoDS_Face& f) const;
+    bool replayMoveStep(MoveOp* op, const gp_Trsf& newTotal);
+    void commitMoveBodies(const std::vector<std::pair<int, std::vector<int>>>& bodies,
+                          const gp_Trsf& d, const glm::vec3& pivot);
+    bool beginMoveStepEdit(int historyIndex);
+    void endMoveSession() { m_moveStep = -1; m_moveStepEditing = false; m_moveStepFace.Nullify(); }
+    // The Move panel's fields for the step, in user axes (X, Y, Z, rX, rY, rZ);
+    // reloaded from the step while untouched.
+    float m_moveStepVals[6] = {0, 0, 0, 0, 0, 0};
+    bool m_moveStepTouched = false;
+    bool applyMoveStepValues(MoveOp* op);
+    // True when the selection is what the step moves (or the step is open
+    // from the history).
+    bool moveStepMatchesSelection(MoveOp* op) const;
 
     // Point conditions (NX Studio Spline): the panel for one selected curve
     // point; a condition button waits for its face/edge pick

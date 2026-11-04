@@ -62,6 +62,7 @@ enum class Refusal {
     OffCurve,            // a retrimmed edge's new end doesn't lie on it
     BuildFailed,         // a face, the sew, or the solid wouldn't build
     Invalid,             // it built and then failed validation
+    SelfIntersects,      // fork: the move drove a face through another (a bore now exits a wall)
 };
 
 const char* refusalText(Refusal r);

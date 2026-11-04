@@ -2,6 +2,7 @@
 #include "ui/StepperRow.h"
 #include "i18n.h"
 #include "app/ui_layout_bridge.h"
+#include "modeling/MoveOp.h"
 #include "ui/TouchWidgets.h" // im-touch number-pad amount fields
 #include "ui_scale.h"
 #include "touch_mode.h"
@@ -1061,6 +1062,8 @@ void Application::renderMovePanel() {
         m_moveSteps.clear();
         m_movePending = false;
         m_moveFacesMode = false;
+        m_moveStepTouched = false;
+        endMoveSession();
     };
     const bool isPlane = m_selection && m_selection->primaryType() == SelectionType::Plane;
     // Fork: the combined (Fusion-style) Move gizmo keeps this panel whichever
@@ -1069,7 +1072,8 @@ void Application::renderMovePanel() {
     if (m_inSketchMode || !m_gizmo ||
         (m_gizmo->getMode() != GizmoMode::Translate && !combined) ||
         m_selection->navigationOnly() ||
-        !(m_selection->hasSelectedBodies() || isPlane || m_moveFacesMode)) {
+        !(m_selection->hasSelectedBodies() || isPlane || m_moveFacesMode ||
+          m_moveStepEditing)) {
         endSession();
         return;
     }
@@ -1138,6 +1142,57 @@ void Application::renderMovePanel() {
             if (!faceMoveTarget(fb, ff))
                 ImGui::TextDisabled("%s", materializr::tr("Tap a flat face to move"));
         }
+    }
+
+    // Fork: the Move step itself (MoveOp) - its translation and angles,
+    // editable; Apply re-runs it, Done ends the session.
+    if (MoveOp* step = activeMoveStep(); step && !isPlane && moveStepMatchesSelection(step)) {
+        if (!m_moveStepTouched) {
+            const double* t = step->translation();
+            const double* r = step->rotationDeg();
+            const float v[6] = {(float)t[0], (float)t[2], (float)t[1],
+                                (float)r[0], (float)r[2], (float)r[1]};
+            for (int i = 0; i < 6; ++i) m_moveStepVals[i] = v[i];
+        }
+        const char* lbl[3] = {"X", "Y", "Z"};
+        const ImVec4 col[3] = {ImVec4(1.00f, 0.35f, 0.35f, 1.0f),
+                               ImVec4(0.40f, 0.55f, 1.00f, 1.0f),
+                               ImVec4(0.35f, 1.00f, 0.35f, 1.0f)};
+        ImGui::TextDisabled("%s", materializr::tr("Distance"));
+        for (int i = 0; i < 3; ++i) {
+            ImGui::PushID(100 + i);
+            ImGui::TextColored(col[i], "%s", lbl[i]);
+            ImGui::SameLine(28.0f * dp);
+            ImGui::SetNextItemWidth(95.0f * dp);
+            if (materializr::lengthField("##sv", &m_moveStepVals[i])) m_moveStepTouched = true;
+            ImGui::SameLine(); ImGui::TextUnformatted(materializr::unitSuffix());
+            ImGui::PopID();
+        }
+        ImGui::TextDisabled("%s", materializr::tr("Angle"));
+        for (int i = 0; i < 3; ++i) {
+            ImGui::PushID(110 + i);
+            ImGui::TextColored(col[i], "%s", lbl[i]);
+            ImGui::SameLine(28.0f * dp);
+            ImGui::SetNextItemWidth(95.0f * dp);
+            if (materializr::inputNumber("##sr", &m_moveStepVals[3 + i], 0.0f, 0.0f, "%.2f"))
+                m_moveStepTouched = true;
+            ImGui::SameLine(); ImGui::TextUnformatted("Â°");
+            ImGui::PopID();
+        }
+        ImGui::Spacing();
+        ImGui::BeginDisabled(!m_moveStepTouched || m_gizmoDragging);
+        if (ImGui::Button(materializr::tr("Apply"), materializr::uiSz(70, 0))) {
+            applyMoveStepValues(step);
+            m_moveStepTouched = false;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(materializr::tr("Done"), materializr::uiSz(70, 0))) {
+            endSession();
+            m_selection->setNavigationOnly(true);
+        }
+        ImGui::End();
+        return;
     }
 
     // User axes (Z up): user X = world X, user Y = world Z, user Z = world Y.

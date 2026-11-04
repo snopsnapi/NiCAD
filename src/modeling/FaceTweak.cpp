@@ -8,6 +8,7 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
@@ -34,6 +35,13 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include "UnifyTolerance.h"
 
 #include <cmath>
 #include <cstdio>
@@ -144,12 +152,13 @@ const char* refusalText(Refusal r) {
         case Refusal::OffCurve:          return "an edge running off this face can't reach its new corner";
         case Refusal::BuildFailed:       return "the rebuilt body wouldn't close up";
         case Refusal::Invalid:           return "the rebuilt body failed validation";
+        case Refusal::SelfIntersects:    return "that move pushes a face through another one (for example a hole would break out through a wall) - this isn't supported yet";
     }
     return "";
 }
 
-Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face,
-                const gp_Trsf& xf) {
+static Result moveFaceCore(const TopoDS_Shape& body, const TopoDS_Face& face,
+                           const gp_Trsf& xf) {
     Result res;
     if (body.IsNull() || face.IsNull()) {
         res.refusal = Refusal::FaceNotFound;
@@ -527,10 +536,230 @@ Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face,
                 return res;
             }
             if (volumeOf(solid) <= 1e-9) { res.refusal = Refusal::Degenerate; return res; }
+            // Fork: every rebuilt face is valid on its own, so BRepCheck passes
+            // a body whose stretched neighbour now runs THROUGH another face
+            // (a bore tilted out through a side wall). That needs a topology
+            // change this engine doesn't make - refuse instead of handing back
+            // a self-intersecting solid.
+            {
+                BOPAlgo_ArgumentAnalyzer an;
+                an.SetShape1(solid);
+                an.SelfInterMode() = Standard_True;
+                an.Perform();
+                if (an.HasFaulty()) { res.refusal = Refusal::SelfIntersects; return res; }
+            }
             res.shape = solid;
             return res;
         }
         res.refusal = Refusal::BuildFailed;
+        return res;
+    } catch (...) {
+        res.refusal = Refusal::BuildFailed;
+        return res;
+    }
+}
+
+} // namespace materializr::tweak
+
+namespace materializr::tweak {
+
+namespace {
+
+// The face's outward normal (orientation-aware).
+bool outwardPlane(const TopoDS_Face& f, gp_Pln& pl, gp_Dir& n) {
+    BRepAdaptor_Surface s(f, Standard_False);
+    if (s.GetType() != GeomAbs_Plane) return false;
+    pl = s.Plane();
+    n = pl.Axis().Direction();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+    return true;
+}
+
+bool selfIntersects(const TopoDS_Shape& s) {
+    BOPAlgo_ArgumentAnalyzer an;
+    an.SetShape1(s);
+    an.SelfInterMode() = Standard_True;
+    an.Perform();
+    return an.HasFaulty();
+}
+
+// The features hanging off the face's INNER loops - a bore's wall and floor, a
+// boss's wall and top, their fillets: everything reached from an inner-loop edge
+// through edges that are on the OUTER wire of the next face. A face reached
+// through one of its own inner wires is a host (the bottom face a through-bore
+// exits) and stops the walk.
+ShapeSet featureFacesOf(const TopoDS_Shape& body, const TopoDS_Face& face) {
+    ShapeSet out;
+    const TopoDS_Wire outer = BRepTools::OuterWire(face);
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+    TopExp::MapShapesAndAncestors(body, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+    auto onOuterWireOf = [](const TopoDS_Edge& e, const TopoDS_Face& g) {
+        const TopoDS_Wire w = BRepTools::OuterWire(g);
+        if (w.IsNull()) return true;
+        for (TopExp_Explorer ex(w, TopAbs_EDGE); ex.More(); ex.Next())
+            if (ex.Current().IsSame(e)) return true;
+        return false;
+    };
+    std::vector<TopoDS_Edge> stack;
+    for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) {
+        if (wx.Current().IsSame(outer)) continue;
+        for (TopExp_Explorer ex(wx.Current(), TopAbs_EDGE); ex.More(); ex.Next())
+            stack.push_back(TopoDS::Edge(ex.Current()));
+    }
+    ShapeSet seenEdges;
+    while (!stack.empty()) {
+        const TopoDS_Edge e = stack.back();
+        stack.pop_back();
+        if (seenEdges.count(e) || !edgeFaces.Contains(e)) continue;
+        seenEdges.insert(e);
+        for (TopTools_ListIteratorOfListOfShape it(edgeFaces.FindFromKey(e)); it.More(); it.Next()) {
+            const TopoDS_Face g = TopoDS::Face(it.Value());
+            if (g.IsSame(face) || out.count(g)) continue;
+            if (!onOuterWireOf(e, g)) continue;   // a host face: stop here
+            out.insert(g);
+            for (TopExp_Explorer ex(g, TopAbs_EDGE); ex.More(); ex.Next())
+                stack.push_back(TopoDS::Edge(ex.Current()));
+        }
+    }
+    return out;
+}
+
+// In `s`, the planar faces lying on `pl` (either sense).
+std::vector<TopoDS_Face> facesOnPlane(const TopoDS_Shape& s, const gp_Pln& pl, double tol) {
+    std::vector<TopoDS_Face> out;
+    for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face f = TopoDS::Face(ex.Current());
+        gp_Pln q;
+        if (!planeOf(f, q)) continue;
+        if (!q.Axis().Direction().IsParallel(pl.Axis().Direction(), 1e-6)) continue;
+        if (pl.Distance(q.Location()) > tol) continue;
+        out.push_back(f);
+    }
+    return out;
+}
+
+} // namespace
+
+// Fusion's Move Faces for a face carrying features (holes, bosses): the
+// features are taken off, the now-plain face moves (neighbours rebuilt by the
+// core engine), and each feature goes back as a boolean - its own cap that sat
+// on the face moved the same way, so a bore lengthens or shortens to the new
+// face and cuts through whatever it now reaches (a wall it breaks out of
+// included). Any surface type: the topology changes are the kernel's booleans.
+Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf& xf) {
+    int wires = 0;
+    for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) ++wires;
+    if (wires <= 1) return moveFaceCore(body, face, xf);
+    Result res;
+    try {
+        OCC_CATCH_SIGNALS
+        gp_Pln planeF;
+        gp_Dir nF;
+        if (!outwardPlane(face, planeF, nF)) { res.refusal = Refusal::NotPlanar; return res; }
+
+        const ShapeSet feats = featureFacesOf(body, face);
+        if (feats.empty()) return moveFaceCore(body, face, xf);
+
+        // 1. Take the features off.
+        BRepAlgoAPI_Defeaturing df;
+        df.SetShape(body);
+        for (const TopoDS_Shape& f : feats) df.AddFaceToRemove(f);
+        df.SetRunParallel(Standard_False);
+        df.SetToFillHistory(Standard_True);
+        df.Build();
+        if (!df.IsDone() || df.HasErrors() || df.Shape().IsNull())
+            return moveFaceCore(body, face, xf);   // refuses a self-intersecting result itself
+        const TopoDS_Shape base = df.Shape();
+
+        // The face, healed of its holes, on the stripped body.
+        TopoDS_Face baseFace;
+        {
+            const TopTools_ListOfShape& mod = df.Modified(face);
+            for (TopTools_ListIteratorOfListOfShape it(mod); it.More(); it.Next())
+                if (it.Value().ShapeType() == TopAbs_FACE) { baseFace = TopoDS::Face(it.Value()); break; }
+            if (baseFace.IsNull()) {
+                for (TopExp_Explorer ex(base, TopAbs_FACE); ex.More(); ex.Next())
+                    if (ex.Current().IsSame(face)) { baseFace = TopoDS::Face(ex.Current()); break; }
+            }
+            if (baseFace.IsNull()) {   // geometric fallback: biggest face on the plane, same sense
+                double best = 0.0;
+                for (const TopoDS_Face& f : facesOnPlane(base, planeF, 1e-6)) {
+                    gp_Pln q; gp_Dir n;
+                    if (!outwardPlane(f, q, n) || n.Dot(nF) < 0.0) continue;
+                    const double a = areaOf(f);
+                    if (a > best) { best = a; baseFace = f; }
+                }
+            }
+        }
+        if (baseFace.IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
+
+        // 2. Move the plain face.
+        Result moved = moveFaceCore(base, baseFace, xf);
+        if (!moved.ok()) return moved;
+        TopoDS_Shape out = moved.shape;
+
+        // 3. The features as volumes: what was cut away and what was added.
+        BRepAlgoAPI_Cut removedOp(base, body);
+        BRepAlgoAPI_Cut addedOp(body, base);
+        if (!removedOp.IsDone() || !addedOp.IsDone()) { res.refusal = Refusal::BuildFailed; return res; }
+
+        Bnd_Box bb;
+        BRepBndLib::Add(body, bb);
+        const double size = bb.IsVoid() ? 10.0 : std::sqrt(bb.SquareExtent());
+        const double ext = std::max(0.01, 1e-3 * size);   // overlap past the face: no coplanar boolean
+        gp_Dir nNew = nF;
+        nNew.Transform(xf);
+
+        auto relocate = [&](const TopoDS_Shape& vol, bool hole,
+                            std::vector<TopoDS_Shape>& outVols) -> bool {
+            for (TopExp_Explorer sx(vol, TopAbs_SOLID); sx.More(); sx.Next()) {
+                const TopoDS_Shape v = sx.Current();
+                if (volumeOf(v) <= 1e-9) continue;
+                const std::vector<TopoDS_Face> caps = facesOnPlane(v, planeF, 1e-5);
+                if (caps.empty()) { outVols.push_back(v); continue; }   // not tied to the face
+                gp_Trsf push;
+                push.SetTranslation(gp_Vec(nNew) * (hole ? ext : -ext));
+                const Result r = moveFaceCore(v, caps.front(), push * xf);
+                if (r.ok()) { outVols.push_back(r.shape); continue; }
+                // The face moved past the feature's far end: a boss the face
+                // rose over is buried in the material, a bore the face sank
+                // below has nothing left to cut. Either way it just goes - any
+                // other failure is a real one.
+                BRepAlgoAPI_Cut inside(v, out);
+                if (!inside.IsDone()) return false;
+                const double left = volumeOf(inside.Shape());
+                const double whole = volumeOf(v);
+                if (!hole && left <= 1e-6 * whole) continue;          // buried boss
+                if (hole && whole - left <= 1e-6 * whole) continue;  // bore now in thin air
+                return false;
+            }
+            return true;
+        };
+        std::vector<TopoDS_Shape> holes, bosses;
+        if (!relocate(addedOp.Shape(), false, bosses) || !relocate(removedOp.Shape(), true, holes)) {
+            res.refusal = Refusal::BuildFailed;
+            return res;
+        }
+        // 4. Put them back.
+        for (const TopoDS_Shape& b : bosses) {
+            BRepAlgoAPI_Fuse fu(out, b);
+            if (!fu.IsDone() || fu.Shape().IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
+            out = fu.Shape();
+        }
+        for (const TopoDS_Shape& h : holes) {
+            BRepAlgoAPI_Cut cu(out, h);
+            if (!cu.IsDone() || cu.Shape().IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
+            out = cu.Shape();
+        }
+        out = materializr::unifySameDomain(out, "FaceTweak features");
+        TopoDS_Shape solid;
+        int nSolids = 0;
+        for (TopExp_Explorer sx(out, TopAbs_SOLID); sx.More(); sx.Next()) { solid = sx.Current(); ++nSolids; }
+        if (nSolids != 1) { res.refusal = Refusal::Degenerate; return res; }
+        if (!BRepCheck_Analyzer(solid).IsValid()) { res.refusal = Refusal::Invalid; return res; }
+        if (selfIntersects(solid)) { res.refusal = Refusal::SelfIntersects; return res; }
+        if (volumeOf(solid) <= 1e-9) { res.refusal = Refusal::Degenerate; return res; }
+        res.shape = solid;
         return res;
     } catch (...) {
         res.refusal = Refusal::BuildFailed;

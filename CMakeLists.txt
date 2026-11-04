@@ -372,6 +372,7 @@ add_executable(materializr
     src/modeling/PatchOp.cpp
     src/modeling/FaceTweak.cpp
     src/modeling/FaceTweakOp.cpp
+    src/modeling/MoveOp.cpp
     src/modeling/SewOp.cpp
     src/modeling/SketchTransformOp.cpp
     src/modeling/ConstructionPlaneOp.cpp

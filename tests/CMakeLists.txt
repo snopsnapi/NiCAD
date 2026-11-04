@@ -84,6 +84,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/PatchOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceTweak.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceTweakOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/MoveOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SewOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SweepOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ConstructionPlaneOp.cpp

@@ -57,3 +57,7 @@ dist-apk-*
 # Fork: curator/executor workflow
 logs/
 .claude/settings.local.json
+apk_local/
+debug/
+shots/
+appdata_*.tar
