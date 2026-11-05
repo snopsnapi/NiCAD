@@ -14,6 +14,9 @@
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BOPAlgo_ArgumentAnalyzer.hxx>
@@ -393,6 +396,185 @@ TEST(FaceTweak, AMoveThatFlattensTheBodyIsRefused) {
     down.SetTranslation(gp_Vec(0, 0, -10));   // top lands exactly on the bottom
     const auto r = tweak::moveFace(box, faceTowards(box, gp_Dir(0, 0, 1)), down);
     EXPECT_FALSE(r.ok()) << "a zero-volume solid is not a valid answer";
+}
+
+// ── Moves that change the body's topology (the extend-and-rebuild engine) ───
+//
+// Each of these needs faces to appear or vanish, so the vertex-sliding engine
+// refuses them and the general one has to answer. Volumes are exact.
+
+namespace {
+
+// An L in XZ, extruded 10 along Y: a tall block (x 0..10, z 0..10) and a low
+// step (x 10..20, z 0..4).
+TopoDS_Shape lBlock() {
+    BRepBuilderAPI_MakePolygon p;
+    p.Add(gp_Pnt(0, 0, 0));
+    p.Add(gp_Pnt(20, 0, 0));
+    p.Add(gp_Pnt(20, 0, 4));
+    p.Add(gp_Pnt(10, 0, 4));
+    p.Add(gp_Pnt(10, 0, 10));
+    p.Add(gp_Pnt(0, 0, 10));
+    p.Close();
+    const TopoDS_Face f = BRepBuilderAPI_MakeFace(p.Wire(), Standard_True).Face();
+    return BRepPrimAPI_MakePrism(f, gp_Vec(0, 10, 0)).Shape();
+}
+
+// The planar face of `s` facing `dir` whose centre is nearest `near`.
+TopoDS_Face faceFacingNear(const TopoDS_Shape& s, const gp_Dir& dir, const gp_Pnt& nearTo) {
+    TopoDS_Face best;
+    double bestD = 1e30;
+    for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
+        BRepAdaptor_Surface a(TopoDS::Face(ex.Current()));
+        if (a.GetType() != GeomAbs_Plane) continue;
+        gp_Dir n = a.Plane().Axis().Direction();
+        if (ex.Current().Orientation() == TopAbs_REVERSED) n.Reverse();
+        if (n.Dot(dir) < 0.999) continue;
+        GProp_GProps g;
+        BRepGProp::SurfaceProperties(ex.Current(), g);
+        const double d = g.CentreOfMass().Distance(nearTo);
+        if (d < bestD) { bestD = d; best = TopoDS::Face(ex.Current()); }
+    }
+    return best;
+}
+
+bool cleanSolid(const TopoDS_Shape& s) {
+    if (!BRepCheck_Analyzer(s).IsValid()) return false;
+    BOPAlgo_ArgumentAnalyzer an;
+    an.SetShape1(s);
+    an.SelfInterMode() = Standard_True;
+    an.Perform();
+    return !an.HasFaulty();
+}
+
+} // namespace
+
+TEST(FaceTweak, AStepRaisedPastTheOtherTopStaysAStep) {
+    // The low step's top goes from z 4 to z 14, above the tall block's top
+    // (z 10). The wall between them first shrinks to nothing, then comes back
+    // facing the other way; the tall block is untouched.
+    const TopoDS_Shape l = lBlock();
+    const TopoDS_Face top = faceFacingNear(l, gp_Dir(0, 0, 1), gp_Pnt(15, 5, 4));
+    ASSERT_FALSE(top.IsNull());
+    gp_Trsf up;
+    up.SetTranslation(gp_Vec(0, 0, 10));
+    const auto r = tweak::moveFace(l, top, up);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(cleanSolid(r.shape));
+    EXPECT_NEAR(vol(r.shape), 10.0 * 10.0 * 10.0 + 10.0 * 10.0 * 14.0, 1e-3);
+}
+
+TEST(FaceTweak, ATopSunkBelowTheStepLeavesTheStep) {
+    // The tall block's top goes from z 10 down to z 2, below the step (z 4).
+    // The step must keep its height: the wall between them is carried on down.
+    const TopoDS_Shape l = lBlock();
+    const TopoDS_Face top = faceFacingNear(l, gp_Dir(0, 0, 1), gp_Pnt(5, 5, 10));
+    ASSERT_FALSE(top.IsNull());
+    gp_Trsf down;
+    down.SetTranslation(gp_Vec(0, 0, -8));
+    const auto r = tweak::moveFace(l, top, down);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(cleanSolid(r.shape));
+    EXPECT_NEAR(vol(r.shape), 10.0 * 10.0 * 2.0 + 10.0 * 10.0 * 4.0, 1e-3);
+}
+
+TEST(FaceTweak, ATopWithANotchInItsRimMovesAndTilts) {
+    // A blind bore centred on the wall x = 0 leaves a half-round notch in the
+    // top's outer edge, with a floor at z 6. Raise the top, then tilt it both
+    // ways about the notch side: the notch runs on along its own axis.
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    const TopoDS_Shape bore =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 10, 6), gp_Dir(0, 0, 1)), 3.0, 10.0).Shape();
+    BRepAlgoAPI_Cut cut(box, bore);
+    ASSERT_TRUE(cut.IsDone());
+    const TopoDS_Shape notched = cut.Shape();
+    const double before = vol(notched);
+    const TopoDS_Face top = faceTowards(notched, gp_Dir(0, 0, 1));
+
+    gp_Trsf up;
+    up.SetTranslation(gp_Vec(0, 0, 3));
+    const auto r = tweak::moveFace(notched, top, up);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(cleanSolid(r.shape));
+    EXPECT_NEAR(vol(r.shape), before + 3.0 * (400.0 - 0.5 * M_PI * 9.0), 1e-3);
+
+    for (double deg : {12.0, -12.0}) {
+        gp_Trsf tilt;
+        tilt.SetRotation(gp_Ax1(gp_Pnt(10, 10, 10), gp_Dir(0, 1, 0)), deg * M_PI / 180.0);
+        const auto t = tweak::moveFace(notched, top, tilt);
+        ASSERT_TRUE(t.ok()) << deg << " deg: " << tweak::refusalText(t.refusal);
+        EXPECT_TRUE(cleanSolid(t.shape)) << deg << " deg";
+        // Same tilt of the plain box, less the notch (half a disc, 4 deep at
+        // the wall's middle, give or take what the tilt adds over its radius).
+        const auto plain = tweak::moveFace(box, faceTowards(box, gp_Dir(0, 0, 1)), tilt);
+        ASSERT_TRUE(plain.ok());
+        const double notch = vol(plain.shape) - vol(t.shape);
+        const double h = 4.0 + 10.0 * std::tan(deg * M_PI / 180.0);   // depth at x = 0
+        EXPECT_NEAR(notch, 0.5 * M_PI * 9.0 * h, 0.5 * M_PI * 9.0 * 3.0 * std::abs(std::tan(deg * M_PI / 180.0)) + 1e-3)
+            << deg << " deg";
+    }
+}
+
+TEST(FaceTweak, ATopSunkBelowABoresFloorLosesTheBore) {
+    // A bore 3 deep; the top sinks 5. Nothing of the bore is left.
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    const TopoDS_Shape bore =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(10, 10, 7), gp_Dir(0, 0, 1)), 3.0, 5.0).Shape();
+    BRepAlgoAPI_Cut cut(box, bore);
+    ASSERT_TRUE(cut.IsDone());
+    const TopoDS_Shape bored = cut.Shape();
+    gp_Trsf down;
+    down.SetTranslation(gp_Vec(0, 0, -5));
+    const auto r = tweak::moveFace(bored, faceTowards(bored, gp_Dir(0, 0, 1)), down);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(cleanSolid(r.shape));
+    EXPECT_NEAR(vol(r.shape), 20.0 * 20.0 * 5.0, 1e-3);
+    int cylinders = 0;
+    for (TopExp_Explorer ex(r.shape, TopAbs_FACE); ex.More(); ex.Next())
+        if (BRepAdaptor_Surface(TopoDS::Face(ex.Current())).GetType() == GeomAbs_Cylinder) ++cylinders;
+    EXPECT_EQ(cylinders, 0);
+}
+
+TEST(FaceTweak, ATopSunkPastAChamferLosesTheChamfer) {
+    // A 3 mm chamfer along the top edge at x = 20. Sinking the top 5 mm takes
+    // it below the chamfer's lower edge (z 7): the chamfer face goes, the side
+    // wall comes back up to the top.
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    BRepBuilderAPI_MakePolygon p;
+    p.Add(gp_Pnt(17, -1, 10.001));
+    p.Add(gp_Pnt(21, -1, 10.001));
+    p.Add(gp_Pnt(21, -1, 6));
+    p.Close();
+    const TopoDS_Face tri = BRepBuilderAPI_MakeFace(p.Wire(), Standard_True).Face();
+    // A wedge whose slanted face runs from (17, z 10) to (20, z 7).
+    BRepBuilderAPI_MakePolygon q;
+    q.Add(gp_Pnt(17, -1, 10));
+    q.Add(gp_Pnt(23, -1, 10));
+    q.Add(gp_Pnt(23, -1, 4));
+    q.Close();
+    const TopoDS_Face tri2 = BRepBuilderAPI_MakeFace(q.Wire(), Standard_True).Face();
+    (void)tri;
+    const TopoDS_Shape wedge = BRepPrimAPI_MakePrism(tri2, gp_Vec(0, 22, 0)).Shape();
+    BRepAlgoAPI_Cut cut(box, wedge);
+    ASSERT_TRUE(cut.IsDone());
+    const TopoDS_Shape chamfered = cut.Shape();
+    EXPECT_NEAR(vol(chamfered), 4000.0 - 0.5 * 3.0 * 3.0 * 20.0, 1e-6);
+
+    gp_Trsf down;
+    down.SetTranslation(gp_Vec(0, 0, -5));
+    const auto r = tweak::moveFace(chamfered, faceTowards(chamfered, gp_Dir(0, 0, 1)), down);
+    ASSERT_TRUE(r.ok()) << tweak::refusalText(r.refusal);
+    EXPECT_TRUE(cleanSolid(r.shape));
+    EXPECT_NEAR(vol(r.shape), 20.0 * 20.0 * 5.0, 1e-3);
+
+    // Raised instead: the chamfer runs on up along its own slope.
+    gp_Trsf up;
+    up.SetTranslation(gp_Vec(0, 0, 2));
+    const auto u = tweak::moveFace(chamfered, faceTowards(chamfered, gp_Dir(0, 0, 1)), up);
+    ASSERT_TRUE(u.ok()) << tweak::refusalText(u.refusal);
+    EXPECT_TRUE(cleanSolid(u.shape));
+    // Cross-section in XZ: 20 x 12 less the corner triangle with legs 5.
+    EXPECT_NEAR(vol(u.shape), (20.0 * 12.0 - 0.5 * 5.0 * 5.0) * 20.0, 1e-3);
 }
 
 // ── The history step ────────────────────────────────────────────────────────

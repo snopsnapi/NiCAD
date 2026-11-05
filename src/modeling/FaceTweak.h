@@ -39,6 +39,17 @@
 // vertex where a bore meets a face has only TWO faces at it, not three, so
 // there was never a third plane to solve with.
 //
+// Fork: TWO ENGINES. The model above is moveFace()'s fast path - exact, cheap
+// enough for every frame of a drag, and it keeps the body's topology. Any move
+// that has to CHANGE the topology (a bore breaking out through a wall, a
+// neighbour shrinking to nothing, a notch in the face's rim, a step the face
+// passes) goes to the second engine in FaceTweak.cpp: the neighbours are
+// extended along their own surfaces, the boolean kernel (BOPAlgo_MakerVolume)
+// cuts space into cells with the new plane, and the cells that are material
+// are fused - the way OCCT's own BOPAlgo_RemoveFeatures fills a removed
+// feature. The limits below are the fast path's; the moved face still has to
+// be planar in both.
+//
 // SCOPE OF THIS VERSION. The moved face itself must be PLANAR; its neighbours
 // need not be. Each of its corners must have exactly one edge leaving into the
 // body - an ordinary manifold corner - and each rebuilt edge's new curve has to

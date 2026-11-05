@@ -35,15 +35,23 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
-#include <BRepAlgoAPI_Cut.hxx>
-#include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BOPAlgo_MakerVolume.hxx>
+#include <BOPTools_AlgoTools3D.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
-#include <BRepAlgoAPI_Common.hxx>
-#include <BRepPrimAPI_MakeHalfSpace.hxx>
-#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepLib.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <GeomLProp_SLProps.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <IntTools_Context.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Pnt2d.hxx>
 #include <Bnd_Box.hxx>
 #include <TopTools_ListOfShape.hxx>
+#include <TopTools_MapOfShape.hxx>
 #include "UnifyTolerance.h"
 
 #include <cmath>
@@ -567,6 +575,36 @@ static Result moveFaceCore(const TopoDS_Shape& body, const TopoDS_Face& face,
 
 namespace materializr::tweak {
 
+// ─── Extend-and-rebuild: the general engine ─────────────────────────────────
+//
+// moveFaceCore() above keeps the body's topology as it is - every corner
+// slides along its own edge - so anything that needs the topology to CHANGE
+// is out of its reach: a bore that breaks out through a wall, a neighbour that
+// shrinks to nothing, a notch on the face's rim, a corner where four faces
+// meet. Each of those used to get a fallback of its own, and every new case
+// fell between them.
+//
+// This engine lets the boolean kernel decide the topology, the same way OCCT's
+// own feature removal (BOPAlgo_RemoveFeatures) fills a removed feature:
+//
+//   1. Drop the moved face. Every face that shared an edge with it (outer
+//      walls, a bore's wall, a boss's wall, a notch) is EXTENDED along its own
+//      surface - a plane to a big rectangle, a cylinder to a long full tube.
+//   2. Add the face's new plane as one big face.
+//   3. BOPAlgo_MakerVolume splits all of that against itself and returns every
+//      closed cell. Breakouts, vanishing faces and new edges are just how the
+//      cells come out.
+//   4. Keep a cell if it is material: it carries a piece of an ORIGINAL face of
+//      the body (a non-moved face, or the original region of an extended one)
+//      and lies on that face's inner side. The region over the old face up to
+//      the new plane joins the body's own cell (the old face is gone), a bore's
+//      column has the bore's floor on its outside, the space a sunk face leaves
+//      is open to the outside and never closes into a cell at all.
+//   5. Fuse the kept cells, merge the split faces back (UnifySameDomain).
+//
+// Nothing here depends on the neighbours being planes: any surface that can be
+// extended works, which is also what a curved moved face will need later.
+
 namespace {
 
 // The face's outward normal (orientation-aware).
@@ -579,125 +617,189 @@ bool outwardPlane(const TopoDS_Face& f, gp_Pln& pl, gp_Dir& n) {
     return true;
 }
 
-bool selfIntersects(const TopoDS_Shape& s) {
-    BOPAlgo_ArgumentAnalyzer an;
-    an.SetShape1(s);
-    an.SelfInterMode() = Standard_True;
-    an.Perform();
-    return an.HasFaulty();
+constexpr double kTwoPi = 6.283185307179586;
+
+Handle(Geom_Surface) basisOf(const TopoDS_Face& f) {
+    Handle(Geom_Surface) s = BRep_Tool::Surface(f);   // location applied
+    while (!s.IsNull() && s->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface)))
+        s = Handle(Geom_RectangularTrimmedSurface)::DownCast(s)->BasisSurface();
+    return s;
 }
 
-// The features hanging off the face's INNER loops - a bore's wall and floor, a
-// boss's wall and top, their fillets: everything reached from an inner-loop edge
-// through edges that are on the OUTER wire of the next face. A face reached
-// through one of its own inner wires is a host (the bottom face a through-bore
-// exits) and stops the walk.
-ShapeSet featureFacesOf(const TopoDS_Shape& body, const TopoDS_Face& face) {
-    ShapeSet out;
-    const TopoDS_Wire outer = BRepTools::OuterWire(face);
-    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
-    TopExp::MapShapesAndAncestors(body, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
-    auto onOuterWireOf = [](const TopoDS_Edge& e, const TopoDS_Face& g) {
-        const TopoDS_Wire w = BRepTools::OuterWire(g);
-        if (w.IsNull()) return true;
-        for (TopExp_Explorer ex(w, TopAbs_EDGE); ex.More(); ex.Next())
-            if (ex.Current().IsSame(e)) return true;
-        return false;
-    };
-    std::vector<TopoDS_Edge> stack;
-    for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) {
-        if (wx.Current().IsSame(outer)) continue;
-        for (TopExp_Explorer ex(wx.Current(), TopAbs_EDGE); ex.More(); ex.Next())
-            stack.push_back(TopoDS::Edge(ex.Current()));
-    }
-    ShapeSet seenEdges;
-    while (!stack.empty()) {
-        const TopoDS_Edge e = stack.back();
-        stack.pop_back();
-        if (seenEdges.count(e) || !edgeFaces.Contains(e)) continue;
-        seenEdges.insert(e);
-        for (TopTools_ListIteratorOfListOfShape it(edgeFaces.FindFromKey(e)); it.More(); it.Next()) {
-            const TopoDS_Face g = TopoDS::Face(it.Value());
-            if (g.IsSame(face) || out.count(g)) continue;
-            if (!onOuterWireOf(e, g)) continue;   // a host face: stop here
-            out.insert(g);
-            for (TopExp_Explorer ex(g, TopAbs_EDGE); ex.More(); ex.Next())
-                stack.push_back(TopoDS::Edge(ex.Current()));
-        }
-    }
-    return out;
-}
-
-// Curved faces touching the face (inner loop or outer edge) and what hangs off
-// them: a bore's wall, a notch a bore cut into the face's rim, a fillet - and
-// any flat face bounded only by those (a bore's floor). Body walls stay out: a
-// flat face is only taken when every neighbour is already a feature face.
-ShapeSet curvedFeatureFacesOf(const TopoDS_Shape& body, const TopoDS_Face& face) {
-    ShapeSet out;
-    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
-    TopExp::MapShapesAndAncestors(body, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
-    auto neighbours = [&](const TopoDS_Face& f) {
-        std::vector<TopoDS_Face> nb;
-        for (TopExp_Explorer ex(f, TopAbs_EDGE); ex.More(); ex.Next()) {
-            if (!edgeFaces.Contains(ex.Current())) continue;
-            for (TopTools_ListIteratorOfListOfShape it(edgeFaces.FindFromKey(ex.Current())); it.More(); it.Next())
-                if (!it.Value().IsSame(f)) nb.push_back(TopoDS::Face(it.Value()));
-        }
-        return nb;
-    };
-    auto curved = [](const TopoDS_Face& f) { gp_Pln p; return !planeOf(f, p); };
-    std::vector<TopoDS_Face> stack;
-    for (const TopoDS_Face& g : neighbours(face))
-        if (curved(g)) stack.push_back(g);
-    while (!stack.empty()) {
-        const TopoDS_Face g = stack.back();
-        stack.pop_back();
-        if (out.count(g) || g.IsSame(face)) continue;
-        out.insert(g);
-        for (const TopoDS_Face& h : neighbours(g))
-            if (curved(h) && !out.count(h) && !h.IsSame(face)) stack.push_back(h);
-    }
-    if (out.empty()) return out;
-    // Flat faces bounded only by feature faces (a floor).
-    bool grew = true;
-    while (grew) {
-        grew = false;
-        for (TopExp_Explorer fx(body, TopAbs_FACE); fx.More(); fx.Next()) {
-            const TopoDS_Face g = TopoDS::Face(fx.Current());
-            if (g.IsSame(face) || out.count(g) || curved(g)) continue;
-            bool allIn = true;
-            for (const TopoDS_Face& h : neighbours(g))
-                if (!out.count(h)) { allIn = false; break; }
-            if (allIn) { out.insert(g); grew = true; }
-        }
-    }
-    return out;
-}
-
-// In `s`, the planar faces lying on `pl` (either sense).
-std::vector<TopoDS_Face> facesOnPlane(const TopoDS_Shape& s, const gp_Pln& pl, double tol) {
+// What stands in for neighbour `g` of the moved face in the rebuild.
+//
+// A neighbour on the face's OUTER loop (a wall) is extended its whole surface
+// over, both ways: the face's region is what its walls enclose, and a wall
+// may have to run on past its far edge too - an L-shaped step whose top sinks
+// below the other top needs the step wall carried on down.
+//
+// A neighbour reached only through an INNER loop (a bore's wall, a boss's
+// wall) is carried on only ACROSS the edges it shares with the face
+// (`shared`): a bore runs on up to the new face, a boss's wall on down into
+// the body - never up past the boss's own top, which would wall off the space
+// a buried boss leaves.
+//   plane              -> a big rectangle (full), or g plus a wide strip past
+//                         each shared line (one-sided)
+//   cylinder, cone     -> the full tube, lengthened at both / the shared end
+//   anything else      -> the whole surface extended (BRepLib::ExtendFace)
+std::vector<TopoDS_Face> extendAcross(const TopoDS_Face& g,
+                                      const std::vector<TopoDS_Edge>& shared,
+                                      bool full, double L) {
     std::vector<TopoDS_Face> out;
-    for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
-        const TopoDS_Face f = TopoDS::Face(ex.Current());
-        gp_Pln q;
-        if (!planeOf(f, q)) continue;
-        if (!q.Axis().Direction().IsParallel(pl.Axis().Direction(), 1e-6)) continue;
-        if (pl.Distance(q.Location()) > tol) continue;
-        out.push_back(f);
+    const Handle(Geom_Surface) s = basisOf(g);
+    if (s.IsNull()) return out;
+    const double tol = Precision::Confusion();
+    BRepAdaptor_Surface a(g, Standard_False);
+    double u1, u2, v1, v2;
+    BRepTools::UVBounds(g, u1, u2, v1, v2);
+
+    if (a.GetType() == GeomAbs_Plane && full) {
+        out.push_back(BRepBuilderAPI_MakeFace(s, u1 - L, u2 + L, v1 - L, v2 + L, tol).Face());
+        return out;
     }
+    if (a.GetType() == GeomAbs_Plane) {
+        out.push_back(g);
+        const gp_Dir ng = a.Plane().Axis().Direction();
+        std::vector<gp_Lin> done;
+        for (const TopoDS_Edge& e : shared) {
+            BRepAdaptor_Curve c(e);
+            if (c.GetType() != GeomAbs_Line) continue;   // plane meets plane in a line
+            const gp_Lin ln = c.Line();
+            bool dup = false;
+            for (const gp_Lin& d : done)
+                if (d.Direction().IsParallel(ln.Direction(), 1e-9) &&
+                    d.Distance(ln.Location()) < 1e-7) { dup = true; break; }
+            if (dup) continue;
+            done.push_back(ln);
+            // In-plane, perpendicular to the line, pointing out of g.
+            gp_Dir away = ng.Crossed(ln.Direction());
+            const gp_Pnt mid = c.Value(0.5 * (c.FirstParameter() + c.LastParameter()));
+            const double probe = std::max(1e-4, 1e-3 * (c.LastParameter() - c.FirstParameter()));
+            BRepClass_FaceClassifier fc(g, mid.Translated(gp_Vec(away) * probe), tol * 10.0);
+            if (fc.State() == TopAbs_IN) away.Reverse();
+            const gp_Pnt o = ln.Location();   // the line's own origin
+            const gp_Vec along(ln.Direction());
+            // Lateral reach measured from the edge's middle, not the line's origin.
+            const double tMid = gp_Vec(o, mid).Dot(along);
+            const gp_Pnt base = o.Translated(along * tMid);
+            const gp_Pnt p0 = base.Translated(along * -L);
+            const gp_Pnt p1 = base.Translated(along * L);
+            const gp_Pnt p2 = p1.Translated(gp_Vec(away) * L);
+            const gp_Pnt p3 = p0.Translated(gp_Vec(away) * L);
+            BRepBuilderAPI_MakePolygon poly(p0, p1, p2, p3, Standard_True);
+            if (!poly.IsDone()) continue;
+            BRepBuilderAPI_MakeFace mf(gp_Pln(base, ng), poly.Wire(), Standard_True);
+            if (mf.IsDone()) out.push_back(mf.Face());
+        }
+        return out;
+    }
+
+    if (a.GetType() == GeomAbs_Cylinder || a.GetType() == GeomAbs_Cone) {
+        // Which end of the tube the shared edges sit at.
+        double ev1 = 1e300, ev2 = -1e300;
+        for (const TopoDS_Edge& e : shared) {
+            double eu1, eu2, w1, w2;
+            BRepTools::UVBounds(g, e, eu1, eu2, w1, w2);
+            ev1 = std::min(ev1, w1);
+            ev2 = std::max(ev2, w2);
+        }
+        const double vt = 1e-6 * std::max(1.0, v2 - v1);
+        double lo = v1, hi = v2;
+        if (ev1 <= v1 + vt) lo = v1 - L;
+        if (ev2 >= v2 - vt) hi = v2 + L;
+        if (full || (lo == v1 && hi == v2)) { lo = v1 - L; hi = v2 + L; }
+        if (a.GetType() == GeomAbs_Cone) {
+            // Not past the apex: the second nappe is a different face.
+            const gp_Cone cn = a.Cone();
+            const double sa = std::sin(cn.SemiAngle());
+            if (std::abs(sa) > 1e-12) {
+                const double apex = -cn.RefRadius() / sa;
+                const double gap = 1e-3 * std::max(1.0, std::abs(apex));
+                if (sa > 0.0) lo = std::max(lo, apex + gap);
+                else          hi = std::min(hi, apex - gap);
+            }
+        }
+        out.push_back(BRepBuilderAPI_MakeFace(s, 0.0, kTwoPi, lo, hi, tol).Face());
+        return out;
+    }
+
+    TopoDS_Face ext;
+    if (a.GetType() == GeomAbs_Sphere || a.GetType() == GeomAbs_Torus)
+        ext = BRepBuilderAPI_MakeFace(s, tol).Face();   // the whole surface
+    else
+        BRepLib::ExtendFace(g, L, Standard_True, Standard_True, Standard_True, Standard_True, ext);
+    if (!ext.IsNull()) out.push_back(ext);
     return out;
 }
+
+// Outward normal of `f` (as oriented in its solid) at the point nearest `p`.
+bool normalAt(const TopoDS_Face& f, const gp_Pnt& p, gp_Dir& n, double& dist) {
+    const Handle(Geom_Surface) s = BRep_Tool::Surface(f);
+    if (s.IsNull()) return false;
+    GeomAPI_ProjectPointOnSurf pr(p, s);
+    if (!pr.IsDone() || pr.NbPoints() == 0) return false;
+    double u, v;
+    pr.LowerDistanceParameters(u, v);
+    dist = pr.LowerDistance();
+    GeomLProp_SLProps props(s, u, v, 1, Precision::Confusion());
+    if (!props.IsNormalDefined()) return false;
+    n = props.Normal();
+    if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+    return true;
+}
+
+// Does the point `p` (on or very near `f`'s surface) fall inside `f`?
+bool insideFace(const TopoDS_Face& f, const gp_Pnt& p, double tol) {
+    BRepClass_FaceClassifier fc(f, p, tol);
+    return fc.State() == TopAbs_IN || fc.State() == TopAbs_ON;
+}
+
+// Merge the faces the rebuild split back into one (UnifySameDomain), safely.
+// A full merge sometimes can't be had: a bore wall that the new plane cuts into
+// two pieces touching at a single point would merge into an invalid face, and
+// then UnifySameDomain gives up on the WHOLE body - the flat faces stay split
+// too, and the next move grabs half a face. So a full merge first; if that is
+// not adoptable, a merge of flat faces only (every edge of a curved face kept).
+// Each attempt works on its own copy: UnifySameDomain edits its input in place.
+TopoDS_Shape mergeSplits(const TopoDS_Shape& shape) {
+    const double v0 = volumeOf(shape);
+    auto adoptable = [&](const TopoDS_Shape& m) {
+        if (m.IsNull()) return false;
+        if (std::abs(volumeOf(m) - v0) > 1e-4 * std::max(1.0, std::abs(v0))) return false;
+        return BRepCheck_Analyzer(m).IsValid() == Standard_True;
+    };
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        try {
+            OCC_CATCH_SIGNALS
+            const TopoDS_Shape work = BRepBuilderAPI_Copy(shape).Shape();
+            ShapeUpgrade_UnifySameDomain u(work, Standard_True, Standard_True, Standard_True);
+            u.SetAngularTolerance(materializr::kUnifyAngularTol);
+            if (attempt == 1) {
+                TopTools_MapOfShape keep;
+                for (TopExp_Explorer fx(work, TopAbs_FACE); fx.More(); fx.Next()) {
+                    gp_Pln pl;
+                    if (planeOf(TopoDS::Face(fx.Current()), pl)) continue;
+                    for (TopExp_Explorer ex(fx.Current(), TopAbs_EDGE); ex.More(); ex.Next())
+                        keep.Add(ex.Current());
+                }
+                u.KeepShapes(keep);
+            }
+            u.Build();
+            if (adoptable(u.Shape())) return u.Shape();
+        } catch (...) {}
+    }
+    return shape;
+}
+
+struct Original {
+    TopoDS_Face face;   // as oriented in the body
+    Bnd_Box box;
+};
 
 } // namespace
 
-// Fusion's Move Faces for a face carrying features (holes, bosses): the
-// features are taken off, the now-plain face moves (neighbours rebuilt by the
-// core engine), and each feature goes back as a boolean - its own cap that sat
-// on the face moved the same way, so a bore lengthens or shortens to the new
-// face and cuts through whatever it now reaches (a wall it breaks out of
-// included). Any surface type: the topology changes are the kernel's booleans.
-static Result featureMove(const TopoDS_Shape& body, const TopoDS_Face& face,
-                          const gp_Trsf& xf, const ShapeSet& feats) {
+static Result rebuildMove(const TopoDS_Shape& body, const TopoDS_Face& face,
+                          const gp_Trsf& xf) {
     static const bool dbg = std::getenv("MZ_TWEAK_DEBUG") != nullptr;
     auto say = [&](const char* m) { if (dbg) std::fprintf(stderr, "[tweak] %s\n", m); };
     Result res;
@@ -706,181 +808,200 @@ static Result featureMove(const TopoDS_Shape& body, const TopoDS_Face& face,
         gp_Pln planeF;
         gp_Dir nF;
         if (!outwardPlane(face, planeF, nF)) { res.refusal = Refusal::NotPlanar; return res; }
-
-        if (feats.empty()) return moveFaceCore(body, face, xf);
-
-        // 1. Take the features off.
-        BRepAlgoAPI_Defeaturing df;
-        df.SetShape(body);
-        for (const TopoDS_Shape& f : feats) df.AddFaceToRemove(f);
-        df.SetRunParallel(Standard_False);
-        df.SetToFillHistory(Standard_True);
-        df.Build();
-        if (!df.IsDone() || df.HasErrors() || df.Shape().IsNull())
-            return moveFaceCore(body, face, xf);   // refuses a self-intersecting result itself
-        const TopoDS_Shape base = df.Shape();
-        say("defeatured");
-
-        // The face, healed of its holes, on the stripped body.
-        TopoDS_Face baseFace;
-        {
-            const TopTools_ListOfShape& mod = df.Modified(face);
-            for (TopTools_ListIteratorOfListOfShape it(mod); it.More(); it.Next())
-                if (it.Value().ShapeType() == TopAbs_FACE) { baseFace = TopoDS::Face(it.Value()); break; }
-            if (baseFace.IsNull()) {
-                for (TopExp_Explorer ex(base, TopAbs_FACE); ex.More(); ex.Next())
-                    if (ex.Current().IsSame(face)) { baseFace = TopoDS::Face(ex.Current()); break; }
-            }
-            if (baseFace.IsNull()) {   // geometric fallback: biggest face on the plane, same sense
-                double best = 0.0;
-                for (const TopoDS_Face& f : facesOnPlane(base, planeF, 1e-6)) {
-                    gp_Pln q; gp_Dir n;
-                    if (!outwardPlane(f, q, n) || n.Dot(nF) < 0.0) continue;
-                    const double a = areaOf(f);
-                    if (a > best) { best = a; baseFace = f; }
-                }
-            }
-        }
-        if (baseFace.IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
-
-        // 2. Move the plain face.
-        Result moved = moveFaceCore(base, baseFace, xf);
-        if (!moved.ok()) { say("plain face move failed"); return moved; }
-        say("plain face moved");
-        TopoDS_Shape out = moved.shape;
-
-        // 3. The features as volumes: what was cut away and what was added.
-        BRepAlgoAPI_Cut removedOp(base, body);
-        BRepAlgoAPI_Cut addedOp(body, base);
-        if (!removedOp.IsDone() || !addedOp.IsDone()) { res.refusal = Refusal::BuildFailed; return res; }
+        const gp_Pln movedF = planeF.Transformed(xf);
+        gp_Dir nNew = nF;
+        nNew.Transform(xf);
 
         Bnd_Box bb;
         BRepBndLib::Add(body, bb);
         const double size = bb.IsVoid() ? 10.0 : std::sqrt(bb.SquareExtent());
-        const double ext = std::max(0.01, 1e-3 * size);   // overlap past the face: no coplanar boolean
-        gp_Dir nNew = nF;
-        nNew.Transform(xf);
-
-        auto relocate = [&](const TopoDS_Shape& vol, bool hole,
-                            std::vector<TopoDS_Shape>& outVols) -> bool {
-            for (TopExp_Explorer sx(vol, TopAbs_SOLID); sx.More(); sx.Next()) {
-                const TopoDS_Shape v = sx.Current();
-                if (volumeOf(v) <= 1e-9) continue;
-                const std::vector<TopoDS_Face> caps = facesOnPlane(v, planeF, 1e-5);
-                if (caps.empty()) { outVols.push_back(v); continue; }   // not tied to the face
-                gp_Trsf push;
-                push.SetTranslation(gp_Vec(nNew) * (hole ? ext : -ext));
-                const Result r = moveFaceCore(v, caps.front(), push * xf);
-                if (r.ok()) { outVols.push_back(r.shape); continue; }
-                if (dbg) std::fprintf(stderr, "[tweak] feature cap move: %s\n", refusalText(r.refusal));
-                // Fallback that never tilts the cap: slide it far out along
-                // the face normal (a plain offset - the feature's walls just
-                // run on along their own direction), then keep only the part
-                // up to the new face (a hole) or from it (a boss), with the
-                // same small overlap. A boolean feature volume often won't
-                // take the exact tilt; it always takes an offset.
-                {
-                    gp_Trsf farOff;   // not `far`: a windows.h macro
-                    farOff.SetTranslation(gp_Vec(nF) * (hole ? 2.0 * size : -2.0 * size));
-                    const Result rf = moveFaceCore(v, caps.front(), farOff);
-                    if (rf.ok()) {
-                        gp_Pln cutPl = planeF.Transformed(xf);
-                        // Keep the side of the new plane a hole lives below and
-                        // a boss above, shifted by the overlap.
-                        cutPl.Translate(gp_Vec(nNew) * (hole ? ext : -ext));
-                        const gp_Pnt keep = cutPl.Location().Translated(
-                            gp_Vec(nNew) * (hole ? -size : size));
-                        TopoDS_Face big = BRepBuilderAPI_MakeFace(
-                            cutPl, -10.0 * size, 10.0 * size, -10.0 * size, 10.0 * size).Face();
-                        const TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(big, keep).Solid();
-                        BRepAlgoAPI_Common cm(rf.shape, half);
-                        if (cm.IsDone() && !cm.Shape().IsNull() && volumeOf(cm.Shape()) > 1e-9) {
-                            outVols.push_back(cm.Shape());
-                            continue;
-                        }
-                    } else if (dbg) {
-                        std::fprintf(stderr, "[tweak] feature far offset: %s\n", refusalText(rf.refusal));
-                    }
-                }
-                // Last resort, no FaceTweak at all: sweep the cap itself along
-                // the feature's own direction (a bore's axis, else the face
-                // normal) and fuse it on - a cylinder's section swept along
-                // its axis IS that cylinder, whatever shape the cap was cut to
-                // (a bore that already breaks out of a wall has a clipped cap
-                // whose corners the offset can't solve). Then trim at the new
-                // face as above.
-                {
-                    gp_Dir dir = nF;
-                    for (TopExp_Explorer fx(v, TopAbs_FACE); fx.More(); fx.Next()) {
-                        BRepAdaptor_Surface sa(TopoDS::Face(fx.Current()), Standard_False);
-                        if (sa.GetType() != GeomAbs_Cylinder) continue;
-                        dir = sa.Cylinder().Axis().Direction();
-                        if (dir.Dot(nF) < 0.0) dir.Reverse();
-                        break;
-                    }
-                    if (!hole) dir.Reverse();   // a boss runs on INTO the body
-                    try {
-                        BRepPrimAPI_MakePrism pr(caps.front(), gp_Vec(dir) * (4.0 * size));
-                        if (pr.IsDone()) {
-                            BRepAlgoAPI_Fuse grown(v, pr.Shape());
-                            gp_Pln cutPl = planeF.Transformed(xf);
-                            cutPl.Translate(gp_Vec(nNew) * (hole ? ext : -ext));
-                            const gp_Pnt keep = cutPl.Location().Translated(
-                                gp_Vec(nNew) * (hole ? -size : size));
-                            TopoDS_Face big = BRepBuilderAPI_MakeFace(
-                                cutPl, -10.0 * size, 10.0 * size, -10.0 * size, 10.0 * size).Face();
-                            const TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(big, keep).Solid();
-                            if (grown.IsDone() && !grown.Shape().IsNull()) {
-                                BRepAlgoAPI_Common cm(grown.Shape(), half);
-                                if (cm.IsDone() && !cm.Shape().IsNull() &&
-                                    volumeOf(cm.Shape()) > 1e-9) {
-                                    if (dbg) std::fprintf(stderr, "[tweak] feature swept\n");
-                                    outVols.push_back(cm.Shape());
-                                    continue;
-                                }
-                            }
-                        }
-                    } catch (...) {}
-                }
-                // The face moved past the feature's far end: a boss the face
-                // rose over is buried in the material, a bore the face sank
-                // below has nothing left to cut. Either way it just goes - any
-                // other failure is a real one.
-                BRepAlgoAPI_Cut inside(v, out);
-                if (!inside.IsDone()) return false;
-                const double left = volumeOf(inside.Shape());
-                const double whole = volumeOf(v);
-                if (!hole && left <= 1e-6 * whole) continue;          // buried boss
-                if (hole && whole - left <= 1e-6 * whole) continue;  // bore now in thin air
-                return false;
-            }
-            return true;
-        };
-        std::vector<TopoDS_Shape> holes, bosses;
-        if (!relocate(addedOp.Shape(), false, bosses) || !relocate(removedOp.Shape(), true, holes)) {
-            res.refusal = Refusal::BuildFailed;
-            return res;
+        GProp_GProps fp;
+        BRepGProp::SurfaceProperties(face, fp);
+        const gp_Pnt c0 = fp.CentreOfMass();
+        const gp_Pnt c1 = c0.Transformed(xf);
+        // How far the move can reach: the most any corner of the face travels
+        // or sits off the new plane. Neighbours are extended a few times that
+        // (a corner sliding down a steep wall travels further than the face
+        // does), never across the whole body: an extension that runs on
+        // through unrelated material only splits faces that then have to be
+        // merged back, and the merge is the fragile part.
+        double reach = c0.Distance(c1);
+        Bnd_Box fb;
+        BRepBndLib::Add(face, fb);
+        const double sizeF = fb.IsVoid() ? size : std::sqrt(fb.SquareExtent());
+        for (TopExp_Explorer vx(face, TopAbs_VERTEX); vx.More(); vx.Next()) {
+            const gp_Pnt v = BRep_Tool::Pnt(TopoDS::Vertex(vx.Current()));
+            reach = std::max(reach, v.Distance(v.Transformed(xf)));
+            reach = std::max(reach, movedF.Distance(v));
         }
-        // 4. Put them back.
-        for (const TopoDS_Shape& b : bosses) {
-            BRepAlgoAPI_Fuse fu(out, b);
+        const double L = std::min(4.0 * size + 2.0 * reach, 3.0 * reach + 0.25 * sizeF + 0.01 * size);
+
+        // 1. The moved face's neighbours, extended; the rest as they are.
+        TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+        TopExp::MapShapesAndAncestors(body, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+        ShapeMap<std::vector<TopoDS_Edge>> adjacent;   // neighbour -> edges it shares with the face
+        ShapeSet outerEdges, onOuter;                   // the face's outer loop; neighbours on it
+        {
+            const TopoDS_Wire ow = BRepTools::OuterWire(face);
+            for (TopExp_Explorer ex(ow, TopAbs_EDGE); ex.More(); ex.Next()) outerEdges.insert(ex.Current());
+        }
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopoDS_Edge e = TopoDS::Edge(ex.Current());
+            if (BRep_Tool::Degenerated(e) || !edgeFaces.Contains(e)) continue;
+            for (TopTools_ListIteratorOfListOfShape it(edgeFaces.FindFromKey(e)); it.More(); it.Next()) {
+                if (it.Value().IsSame(face)) continue;
+                if (outerEdges.count(e)) onOuter.insert(it.Value());
+                auto& v = adjacent[it.Value()];
+                bool have = false;
+                for (const TopoDS_Edge& x : v) if (x.IsSame(e)) { have = true; break; }
+                if (!have) v.push_back(e);
+            }
+        }
+        if (adjacent.empty()) { res.refusal = Refusal::BuildFailed; return res; }
+
+        TopTools_ListOfShape args;
+        std::vector<Original> originals;
+        for (TopExp_Explorer fx(body, TopAbs_FACE); fx.More(); fx.Next()) {
+            const TopoDS_Face g = TopoDS::Face(fx.Current());
+            if (g.IsSame(face)) continue;
+            Original o;
+            o.face = g;
+            BRepBndLib::Add(g, o.box);
+            o.box.Enlarge(1e-4 * size);
+            originals.push_back(o);
+            auto adj = adjacent.find(g);
+            if (adj != adjacent.end()) {
+                const std::vector<TopoDS_Face> ext = extendAcross(g, adj->second, onOuter.count(g) > 0, L);
+                if (ext.empty()) { say("a neighbour wouldn't extend"); res.refusal = Refusal::BuildFailed; return res; }
+                for (const TopoDS_Face& e : ext) args.Append(e);
+            } else {
+                args.Append(g);
+            }
+        }
+
+        // 2. The new plane, centred where the face's centre went - and the old
+        //    face itself, so the cells next to it can be told apart (step 4).
+        gp_Pln bigPl(c1, nNew);
+        const double B = sizeF + L;   // the new face can't spread further than that
+        args.Append(BRepBuilderAPI_MakeFace(bigPl, -B, B, -B, B).Face());
+        args.Append(face);
+
+        // 3. Every closed cell.
+        BOPAlgo_MakerVolume mv;
+        mv.SetArguments(args);
+        mv.SetIntersect(Standard_True);
+        mv.SetRunParallel(Standard_False);
+        mv.SetAvoidInternalShapes(Standard_True);
+        mv.Perform();
+        if (mv.HasErrors() || mv.Shape().IsNull()) { say("maker volume failed"); res.refusal = Refusal::BuildFailed; return res; }
+        say("cells built");
+
+        // 4. Which cells are material.
+        //    A cell next to the old face (either side) is the region the move
+        //    sweeps: material exactly when it lies under the new plane - that
+        //    is the move itself, growing or cutting. Any other cell keeps what
+        //    the body says: it is material if it lies on the inner side of a
+        //    piece of an original face.
+        Handle(IntTools_Context) ctx = new IntTools_Context;
+        const double tolOn = std::max(1e-6, 1e-7 * size);
+        Bnd_Box faceBox;
+        BRepBndLib::Add(face, faceBox);
+        faceBox.Enlarge(1e-4 * size);
+        std::vector<TopoDS_Shape> kept;
+        int nCells = 0;
+        for (TopExp_Explorer sx(mv.Shape(), TopAbs_SOLID); sx.More(); sx.Next()) {
+            ++nCells;
+            const TopoDS_Shape cell = sx.Current();
+            int in = 0, out = 0;
+            bool touchesFace = false;
+            for (TopExp_Explorer cf(cell, TopAbs_FACE); cf.More() && !touchesFace; cf.Next()) {
+                const TopoDS_Face piece = TopoDS::Face(cf.Current());
+                gp_Pnt q;
+                gp_Pnt2d q2;
+                if (BOPTools_AlgoTools3D::PointInFace(piece, q, q2, ctx) != 0) continue;
+                gp_Dir nPiece;
+                double d0 = 0.0;
+                if (!normalAt(piece, q, nPiece, d0)) continue;
+                if (!faceBox.IsOut(q) && planeF.Distance(q) < tolOn && insideFace(face, q, tolOn) &&
+                    std::abs(nPiece.Dot(nF)) > 0.5) {
+                    touchesFace = true;
+                    if (dbg) std::fprintf(stderr, "[tweak]   face piece at (%.3f %.3f %.3f) n.nF %.3f\n",
+                                          q.X(), q.Y(), q.Z(), nPiece.Dot(nF));
+                    break;
+                }
+                for (const Original& o : originals) {
+                    if (o.box.IsOut(q)) continue;
+                    gp_Dir nOrig;
+                    double d = 0.0;
+                    if (!normalAt(o.face, q, nOrig, d) || d > tolOn) continue;
+                    if (!insideFace(o.face, q, tolOn)) continue;
+                    const double dot = nPiece.Dot(nOrig);
+                    if (dot > 0.5) ++in;          // the cell is on the body's side of it
+                    else if (dot < -0.5) ++out;   // the cell is outside the body there
+                    break;
+                }
+            }
+            bool keep;
+            if (touchesFace) {
+                // Wholly on one side of the new plane (it split everything),
+                // so the centre of mass says which.
+                GProp_GProps vp;
+                BRepGProp::VolumeProperties(cell, vp);
+                keep = gp_Vec(c1, vp.CentreOfMass()).Dot(gp_Vec(nNew)) < 0.0;
+            } else {
+                keep = in > 0 && in >= out;
+            }
+            if (dbg) {
+                GProp_GProps vp;
+                BRepGProp::VolumeProperties(cell, vp);
+                const gp_Pnt cm = vp.CentreOfMass();
+                std::fprintf(stderr, "[tweak]   cell vol %.4f at (%.3f %.3f %.3f): %s in %d out %d -> %s\n",
+                             vp.Mass(), cm.X(), cm.Y(), cm.Z(), touchesFace ? "by the face," : "",
+                             in, out, keep ? "keep" : "drop");
+            }
+            if (keep) kept.push_back(cell);
+        }
+        if (dbg) std::fprintf(stderr, "[tweak] cells %d, kept %zu\n", nCells, kept.size());
+        if (kept.empty()) { res.refusal = Refusal::Degenerate; return res; }
+
+        // 5. One solid again.
+        TopoDS_Shape out = kept.front();
+        if (kept.size() > 1) {
+            TopTools_ListOfShape a, t;
+            a.Append(kept.front());
+            for (size_t i = 1; i < kept.size(); ++i) t.Append(kept[i]);
+            BRepAlgoAPI_Fuse fu;
+            fu.SetArguments(a);
+            fu.SetTools(t);
+            fu.SetRunParallel(Standard_False);
+            fu.Build();
             if (!fu.IsDone() || fu.Shape().IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
             out = fu.Shape();
         }
-        for (const TopoDS_Shape& h : holes) {
-            BRepAlgoAPI_Cut cu(out, h);
-            if (!cu.IsDone() || cu.Shape().IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
-            out = cu.Shape();
-        }
-        say("features back");
-        out = materializr::unifySameDomain(out, "FaceTweak features");
+        out = mergeSplits(out);
+
         TopoDS_Shape solid;
         int nSolids = 0;
         for (TopExp_Explorer sx(out, TopAbs_SOLID); sx.More(); sx.Next()) { solid = sx.Current(); ++nSolids; }
-        if (nSolids != 1) { res.refusal = Refusal::Degenerate; return res; }
-        if (!BRepCheck_Analyzer(solid).IsValid()) { res.refusal = Refusal::Invalid; return res; }
-        if (selfIntersects(solid)) { res.refusal = Refusal::SelfIntersects; return res; }
+        if (nSolids != 1) { say("not one solid"); res.refusal = Refusal::Degenerate; return res; }
+        int shellsBefore = 0, shellsAfter = 0;
+        for (TopExp_Explorer x(body, TopAbs_SHELL); x.More(); x.Next()) ++shellsBefore;
+        for (TopExp_Explorer x(solid, TopAbs_SHELL); x.More(); x.Next()) ++shellsAfter;
+        if (shellsAfter > shellsBefore) { say("a stray void"); res.refusal = Refusal::Degenerate; return res; }   // a stray void
+        if (!BRepCheck_Analyzer(solid).IsValid()) { say("invalid"); res.refusal = Refusal::Invalid; return res; }
         if (volumeOf(solid) <= 1e-9) { res.refusal = Refusal::Degenerate; return res; }
+
+        // The new plane has to show up: a move that buries or loses the face
+        // entirely (pushed past the far side) is not a face move.
+        bool hasNewFace = false;
+        for (TopExp_Explorer fx(solid, TopAbs_FACE); fx.More() && !hasNewFace; fx.Next()) {
+            gp_Pln q;
+            gp_Dir n;
+            if (!outwardPlane(TopoDS::Face(fx.Current()), q, n)) continue;
+            if (n.Dot(nNew) > 1.0 - 1e-9 && movedF.Distance(q.Location()) < tolOn * 10.0) hasNewFace = true;
+        }
+        if (!hasNewFace) { say("no new face"); res.refusal = Refusal::Degenerate; return res; }
+
         res.shape = solid;
         return res;
     } catch (...) {
@@ -889,33 +1010,17 @@ static Result featureMove(const TopoDS_Shape& body, const TopoDS_Face& face,
     }
 }
 
-// The public entry: features on the face's inner loops go the feature way
-// first; otherwise (or if that fails) the plain engine; and if the plain engine
-// can't do it, curved features touching the face's rim (a bore that already
-// breaks out through the face's edge) go the feature way too.
+// The public entry. The vertex-sliding engine first: it is exact, cheap enough
+// for every frame of a drag, and leaves the untouched faces as they were. When
+// it can't (the move changes the body's topology), the extend-and-rebuild
+// engine does it with the boolean kernel.
 Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf& xf) {
-    int wires = 0;
-    for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) ++wires;
-    if (wires > 1) {
-        const ShapeSet feats = featureFacesOf(body, face);
-        if (!feats.empty()) {
-            const Result r = featureMove(body, face, xf, feats);
-            if (r.ok() || r.refusal == Refusal::NoChange) return r;
-        }
-    }
     const Result plain = moveFaceCore(body, face, xf);
     if (plain.ok() || plain.refusal == Refusal::NoChange ||
         plain.refusal == Refusal::NotPlanar || plain.refusal == Refusal::FaceNotFound)
         return plain;
-    try {
-        OCC_CATCH_SIGNALS
-        const ShapeSet curved = curvedFeatureFacesOf(body, face);
-        if (curved.empty()) return plain;
-        const Result r = featureMove(body, face, xf, curved);
-        return r.ok() ? r : plain;
-    } catch (...) {
-        return plain;
-    }
+    const Result r = rebuildMove(body, face, xf);
+    return r.ok() ? r : plain;
 }
 
 } // namespace materializr::tweak
