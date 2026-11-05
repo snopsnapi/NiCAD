@@ -38,6 +38,8 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -45,6 +47,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <vector>
@@ -647,6 +650,8 @@ std::vector<TopoDS_Face> facesOnPlane(const TopoDS_Shape& s, const gp_Pln& pl, d
 // face and cuts through whatever it now reaches (a wall it breaks out of
 // included). Any surface type: the topology changes are the kernel's booleans.
 Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf& xf) {
+    static const bool dbg = std::getenv("MZ_TWEAK_DEBUG") != nullptr;
+    auto say = [&](const char* m) { if (dbg) std::fprintf(stderr, "[tweak] %s\n", m); };
     int wires = 0;
     for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) ++wires;
     if (wires <= 1) return moveFaceCore(body, face, xf);
@@ -670,6 +675,7 @@ Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf
         if (!df.IsDone() || df.HasErrors() || df.Shape().IsNull())
             return moveFaceCore(body, face, xf);   // refuses a self-intersecting result itself
         const TopoDS_Shape base = df.Shape();
+        say("defeatured");
 
         // The face, healed of its holes, on the stripped body.
         TopoDS_Face baseFace;
@@ -695,7 +701,8 @@ Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf
 
         // 2. Move the plain face.
         Result moved = moveFaceCore(base, baseFace, xf);
-        if (!moved.ok()) return moved;
+        if (!moved.ok()) { say("plain face move failed"); return moved; }
+        say("plain face moved");
         TopoDS_Shape out = moved.shape;
 
         // 3. The features as volumes: what was cut away and what was added.
@@ -721,6 +728,36 @@ Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf
                 push.SetTranslation(gp_Vec(nNew) * (hole ? ext : -ext));
                 const Result r = moveFaceCore(v, caps.front(), push * xf);
                 if (r.ok()) { outVols.push_back(r.shape); continue; }
+                if (dbg) std::fprintf(stderr, "[tweak] feature cap move: %s\n", refusalText(r.refusal));
+                // Fallback that never tilts the cap: slide it far out along
+                // the face normal (a plain offset - the feature's walls just
+                // run on along their own direction), then keep only the part
+                // up to the new face (a hole) or from it (a boss), with the
+                // same small overlap. A boolean feature volume often won't
+                // take the exact tilt; it always takes an offset.
+                {
+                    gp_Trsf farOff;   // not `far`: a windows.h macro
+                    farOff.SetTranslation(gp_Vec(nF) * (hole ? 2.0 * size : -2.0 * size));
+                    const Result rf = moveFaceCore(v, caps.front(), farOff);
+                    if (rf.ok()) {
+                        gp_Pln cutPl = planeF.Transformed(xf);
+                        // Keep the side of the new plane a hole lives below and
+                        // a boss above, shifted by the overlap.
+                        cutPl.Translate(gp_Vec(nNew) * (hole ? ext : -ext));
+                        const gp_Pnt keep = cutPl.Location().Translated(
+                            gp_Vec(nNew) * (hole ? -size : size));
+                        TopoDS_Face big = BRepBuilderAPI_MakeFace(
+                            cutPl, -10.0 * size, 10.0 * size, -10.0 * size, 10.0 * size).Face();
+                        const TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(big, keep).Solid();
+                        BRepAlgoAPI_Common cm(rf.shape, half);
+                        if (cm.IsDone() && !cm.Shape().IsNull() && volumeOf(cm.Shape()) > 1e-9) {
+                            outVols.push_back(cm.Shape());
+                            continue;
+                        }
+                    } else if (dbg) {
+                        std::fprintf(stderr, "[tweak] feature far offset: %s\n", refusalText(rf.refusal));
+                    }
+                }
                 // The face moved past the feature's far end: a boss the face
                 // rose over is buried in the material, a bore the face sank
                 // below has nothing left to cut. Either way it just goes - any
@@ -751,6 +788,7 @@ Result moveFace(const TopoDS_Shape& body, const TopoDS_Face& face, const gp_Trsf
             if (!cu.IsDone() || cu.Shape().IsNull()) { res.refusal = Refusal::BuildFailed; return res; }
             out = cu.Shape();
         }
+        say("features back");
         out = materializr::unifySameDomain(out, "FaceTweak features");
         TopoDS_Shape solid;
         int nSolids = 0;

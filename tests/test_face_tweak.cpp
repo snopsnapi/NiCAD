@@ -293,6 +293,28 @@ TEST(FaceTweak, ABoreTiltedOutThroughAWallCutsTheWall) {
         << "the side wall must carry the bore's opening";
 }
 
+TEST(FaceTweak, TiltingATopWithABlindBoreAtManyAngles) {
+    // Fork: the tablet case - a block with a blind bore in its top face, the
+    // top rotated by the Move gizmo about an axis through the face centre.
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 30.0, 30.0, 40.0).Shape();
+    const TopoDS_Shape bore =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(15, 15, 28), gp_Dir(0, 0, 1)), 8.0, 13.0).Shape();
+    BRepAlgoAPI_Cut cut(box, bore);
+    ASSERT_TRUE(cut.IsDone());
+    const TopoDS_Shape bored = cut.Shape();
+    const TopoDS_Face top = faceTowards(bored, gp_Dir(0, 0, 1));
+    const gp_Dir axes[2] = {gp_Dir(1, 0, 0), gp_Dir(0.6, 0.8, 0)};
+    for (const gp_Dir& ax : axes) {
+        for (double deg : {5.0, 15.0, 30.0, -20.0}) {
+            gp_Trsf rot;
+            rot.SetRotation(gp_Ax1(gp_Pnt(15, 15, 40), ax), deg * M_PI / 180.0);
+            const auto r = tweak::moveFace(bored, top, rot);
+            EXPECT_TRUE(r.ok()) << "axis (" << ax.X() << "," << ax.Y() << ") " << deg
+                                << " deg: " << tweak::refusalText(r.refusal);
+        }
+    }
+}
+
 TEST(FaceTweak, ABossStaysPutAndIsTrimmedOrBuried) {
     // Fusion: the face a boss stands on moves, the boss itself (not selected)
     // stays where it is - raised a little, less of it shows; raised past its
