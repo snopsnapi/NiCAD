@@ -140,8 +140,22 @@ void Application::commitFaceDrag(const gp_Trsf& t) {
         op->setFromTrsf(t);
         if (!m_history->pushOperation(std::move(op), *m_document)) {
             const tweak::Result r = tweak::moveFace(d.orig, d.face, t);
-            showToast(std::string(materializr::tr("Couldn't move the face: ")) +
-                      tweak::refusalText(r.refusal));
+            {
+                gp_XYZ ax(0, 0, 1);
+                double ang = 0.0;
+                t.GetRotation(ax, ang);
+                const gp_XYZ tr = t.TranslationPart();
+                std::fprintf(stderr, "[Move] face move refused (%s): axis=(%.4f %.4f %.4f) "
+                             "angle=%.4f deg trans=(%.4f %.4f %.4f) centre=(%.4f %.4f %.4f)\n",
+                             tweak::refusalText(r.refusal), ax.X(), ax.Y(), ax.Z(),
+                             ang * 180.0 / 3.14159265358979, tr.X(), tr.Y(), tr.Z(),
+                             d.centre.x, d.centre.y, d.centre.z);
+            }
+            // Fusion: a slide inside the face's own plane (or a spin about its
+            // normal) just does nothing - no error.
+            if (r.refusal != tweak::Refusal::NoChange)
+                showToast(std::string(materializr::tr("Couldn't move the face: ")) +
+                          tweak::refusalText(r.refusal));
             return;
         }
         m_moveStep = m_history->currentStep();
@@ -213,9 +227,19 @@ bool Application::replayMoveStep(MoveOp* op, const gp_Trsf& newTotal) {
     op->setFromTrsf(newTotal);
     auto trackBodies = trackBodyChanges();
     if (!m_history->editStep(m_moveStep, *m_document, /*transactional=*/true)) {
+        const tweak::Refusal why = op->lastRefusal();
+        const double* t1 = op->translation();
+        const double* r1 = op->rotationDeg();
+        std::fprintf(stderr, "[Move] step %d refused (%s): t=(%.4f %.4f %.4f) r=(%.4f %.4f %.4f) "
+                     "pivot=(%.4f %.4f %.4f)\n", m_moveStep, tweak::refusalText(why),
+                     t1[0], t1[1], t1[2], r1[0], r1[1], r1[2],
+                     op->pivot()[0], op->pivot()[1], op->pivot()[2]);
         op->setParams(t0, r0);
         m_history->editStep(m_moveStep, *m_document, true);
-        showToast(materializr::tr("Couldn't apply the move - the result is invalid or later steps depend on it."));
+        if (why != tweak::Refusal::NoChange)
+            showToast(std::string(materializr::tr("Couldn't apply the move: ")) +
+                      (why != tweak::Refusal::None ? tweak::refusalText(why)
+                                                   : materializr::tr("later steps depend on it")));
         return false;
     }
     for (int id : op->bodyIds()) markBodyDirty(id);

@@ -291,6 +291,30 @@ TEST(FaceTweak, ABoreTiltedOutThroughAWallCutsTheWall) {
     };
     EXPECT_LT(wallArea(r.shape), wallArea(plain.shape) - 1.0)
         << "the side wall must carry the bore's opening";
+
+    // And again: a bore that already breaks out of the wall has a clipped
+    // volume (its cap is cut by the wall). Tilting the top once more, about
+    // another axis, must still work (the tablet case: two Move drags).
+    for (double deg : {15.0, -20.0}) {
+        TopoDS_Face top2;
+        double best = 0.0;
+        for (TopExp_Explorer ex(r.shape, TopAbs_FACE); ex.More(); ex.Next()) {
+            int w = 0;
+            for (TopExp_Explorer wx(ex.Current(), TopAbs_WIRE); wx.More(); wx.Next()) ++w;
+            BRepAdaptor_Surface s(TopoDS::Face(ex.Current()));
+            if (s.GetType() != GeomAbs_Plane) continue;
+            GProp_GProps g;
+            BRepGProp::SurfaceProperties(ex.Current(), g);
+            if (g.CentreOfMass().Z() > 9.0 && g.Mass() > best) { best = g.Mass(); top2 = TopoDS::Face(ex.Current()); }
+        }
+        ASSERT_FALSE(top2.IsNull());
+        GProp_GProps gc;
+        BRepGProp::SurfaceProperties(top2, gc);
+        gp_Trsf again;   // about the face's own centre, like the Move gizmo
+        again.SetRotation(gp_Ax1(gc.CentreOfMass(), gp_Dir(1, 0, 0)), deg * M_PI / 180.0);
+        const auto r2 = tweak::moveFace(r.shape, top2, again);
+        EXPECT_TRUE(r2.ok()) << deg << " deg: " << tweak::refusalText(r2.refusal);
+    }
 }
 
 TEST(FaceTweak, TiltingATopWithABlindBoreAtManyAngles) {

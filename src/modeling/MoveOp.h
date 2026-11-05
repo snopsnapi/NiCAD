@@ -44,6 +44,10 @@ public:
     const double* pivot() const { return m_pivot; }
     std::vector<int> bodyIds() const;
     int faceBodyId() const { return m_faceBody; }
+    // Why the face move last declined (None for bodies or success).
+    materializr::tweak::Refusal lastRefusal() const {
+        return m_faceOp ? m_faceOp->refusal() : materializr::tweak::Refusal::None;
+    }
 
     bool execute(Document& doc) override;
     bool undo(Document& doc) override;
