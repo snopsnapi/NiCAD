@@ -54,7 +54,38 @@ glm::vec3 faceCentre(const TopoDS_Face& f) {
                      static_cast<float>(c.Z()));
 }
 
+// The face `before` became in `body` after moving by `t`: the planar face
+// facing the moved way whose centre is nearest the moved centre.
+TopoDS_Face findMovedFace(const TopoDS_Shape& body, const TopoDS_Face& before,
+                          const glm::vec3& centre, const gp_Trsf& t, int* index = nullptr) {
+    gp_Pln pl0;
+    if (body.IsNull() || !planarFace(before, pl0)) return TopoDS_Face();
+    gp_Dir n = pl0.Axis().Direction();
+    n.Transform(t);
+    gp_Pnt c(centre.x, centre.y, centre.z);
+    c.Transform(t);
+    int idx = 0, bestIdx = -1;
+    double best = std::numeric_limits<double>::max();
+    TopoDS_Face bestFace;
+    for (TopExp_Explorer ex(body, TopAbs_FACE); ex.More(); ex.Next(), ++idx) {
+        const TopoDS_Face f = TopoDS::Face(ex.Current());
+        gp_Pln pl;
+        if (!planarFace(f, pl)) continue;
+        if (pl.Axis().Direction().Dot(n) < 0.999) continue;
+        const glm::vec3 fc = faceCentre(f);
+        const double dist = c.Distance(gp_Pnt(fc.x, fc.y, fc.z));
+        if (dist < best) { best = dist; bestIdx = idx; bestFace = f; }
+    }
+    if (index) *index = bestIdx;
+    return bestFace;
+}
+
 } // namespace
+
+const TopoDS_Face* Application::faceDragHighlight() const {
+    if (!m_faceDrag.active) return nullptr;
+    return &m_faceDrag.live;
+}
 
 bool Application::faceMoveTarget(int& bodyId, TopoDS_Face& face) const {
     if (!m_moveFacesMode || !m_selection) return false;
@@ -96,6 +127,7 @@ void Application::beginFaceDrag() {
     if (m_faceDrag.orig.IsNull()) return;
     m_faceDrag.bodyId = bid;
     m_faceDrag.face = f;
+    m_faceDrag.live = f;
     m_faceDrag.centre = faceCentre(f);
     m_faceDrag.active = true;
     m_faceDrag.haveGood = false;
@@ -107,6 +139,7 @@ void Application::applyFaceDrag(const gp_Trsf& t) {
     const tweak::Result r = tweak::moveFace(m_faceDrag.orig, m_faceDrag.face, t);
     if (r.ok()) {
         try { m_document->updateBody(m_faceDrag.bodyId, r.shape); } catch (...) { return; }
+        m_faceDrag.live = findMovedFace(r.shape, m_faceDrag.face, m_faceDrag.centre, t);
         m_faceDrag.haveGood = true;
         m_faceDrag.refusal.clear();
     } else {
@@ -166,26 +199,10 @@ void Application::commitFaceDrag(const gp_Trsf& t) {
 
     // Keep the moved face selected, so the next drag continues from it: the
     // rebuilt body's planar face nearest the moved centre, facing the moved way.
-    gp_Pln before;
-    if (!planarFace(d.face, before)) { m_selection->clear(); return; }
-    gp_Dir n = before.Axis().Direction();
-    n.Transform(t);
-    gp_Pnt c(d.centre.x, d.centre.y, d.centre.z);
-    c.Transform(t);
     TopoDS_Shape body;
     try { body = m_document->getBody(d.bodyId); } catch (...) { m_selection->clear(); return; }
-    int idx = 0, bestIdx = -1;
-    double best = std::numeric_limits<double>::max();
-    TopoDS_Face bestFace;
-    for (TopExp_Explorer ex(body, TopAbs_FACE); ex.More(); ex.Next(), ++idx) {
-        const TopoDS_Face f = TopoDS::Face(ex.Current());
-        gp_Pln pl;
-        if (!planarFace(f, pl)) continue;
-        if (pl.Axis().Direction().Dot(n) < 0.999) continue;
-        const glm::vec3 fc = faceCentre(f);
-        const double dist = c.Distance(gp_Pnt(fc.x, fc.y, fc.z));
-        if (dist < best) { best = dist; bestIdx = idx; bestFace = f; }
-    }
+    int bestIdx = -1;
+    const TopoDS_Face bestFace = findMovedFace(body, d.face, d.centre, t, &bestIdx);
     m_selection->clear();
     if (bestIdx >= 0) {
         SelectionEntry e;

@@ -1383,6 +1383,9 @@ private:
         int bodyId = -1;
         TopoDS_Shape orig;
         TopoDS_Face face;
+        // The moved face in the body on screen (rebuilt each good frame), so
+        // the blue highlight follows the real shape, not a rigid copy.
+        TopoDS_Face live;
         glm::vec3 centre{0.0f};
         bool haveGood = false;
         std::string refusal;
@@ -1392,6 +1395,8 @@ private:
     mutable glm::vec3 m_faceCentreCache{0.0f};
     bool faceMoveTarget(int& bodyId, TopoDS_Face& face) const;
     glm::vec3 faceMoveGizmoCentre() const;
+    // During a face drag: the face to tint instead of the selection (null otherwise).
+    const TopoDS_Face* faceDragHighlight() const;
     void beginFaceDrag();
     void applyFaceDrag(const gp_Trsf& t);
     void commitFaceDrag(const gp_Trsf& t);

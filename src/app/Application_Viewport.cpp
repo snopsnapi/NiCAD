@@ -837,7 +837,15 @@ void Application::renderViewport() {
         // the time. (Revolve still hides it - that preview deforms the
         // geometry rather than rigidly transforming it, so no single matrix
         // can carry the outline along.)
-        if (!m_revolveLiveActive) {
+        // Fork: Move > Faces rebuilds the body every drag frame (the face's
+        // rim changes as neighbours are re-trimmed, and a refused frame keeps
+        // the last good pose), so a rigidly turned copy of the old face drifts
+        // off the real one. Tint the face in the body on screen instead.
+        if (const TopoDS_Face* live = faceDragHighlight()) {
+            if (!live->IsNull())
+                m_selectionHighlight->highlightShapes({*live}, view, proj,
+                                                      glm::vec3(0.25f, 0.55f, 1.0f));
+        } else if (!m_revolveLiveActive) {
             m_selectionHighlight->render(*m_selection, *m_document,
                                          view * m_gizmoPreviewXf, proj);
         }
